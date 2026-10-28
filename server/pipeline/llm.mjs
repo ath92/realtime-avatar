@@ -9,7 +9,7 @@
 // orchestration layer wants regardless of vendor.
 
 const STUB_LINES = [
-  "Hey, good to see you. I'm running entirely in your browser right now — the face you're looking at is about twenty thousand little gaussians being pushed around sixty times a second.",
+  "Hey, good to see you. I'm running entirely in your browser right now — the face you're looking at is about forty thousand little gaussians being pushed around sixty times a second.",
   'The voice comes from the machine, the mouth comes from the audio, and the only thing leaving your device is text. No video, no camera, no upload.',
   'Ask me anything. If this were wired to a real model you would already be talking to it.',
 ];

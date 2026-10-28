@@ -16,7 +16,8 @@ const statusEl = $('#status');
 const statsEl = $('#stats');
 
 const params = new URLSearchParams(location.search);
-const STATIC = params.has('static');   // ?static=1 freezes the rig at rest for asset debugging
+const STATIC = params.has('static');        // ?static=1 freezes the rig at rest
+const ASSET = params.get('asset') || '/assets/head.avtr';   // ?asset=/path/to/other.avtr
 
 const state = {
   avatar: null,
@@ -41,7 +42,7 @@ const state = {
 
 async function main() {
   statusEl.textContent = 'loading rig…';
-  const avatar = await loadAvatar('/assets/head.avtr');
+  const avatar = await loadAvatar(ASSET);
   state.avatar = avatar;
 
   state.renderer = new SplatRenderer(canvas);

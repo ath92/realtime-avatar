@@ -29,6 +29,7 @@ elsewhere it falls back to a synthetic babble so the pipeline still runs.
 ```bash
 node tools/make-avatar.mjs      # rebuild assets/head.avtr from the procedural rig
 node tools/preview.mjs --out preview.png --yaw 0.3 --preset talk
+node tools/check-avatar.mjs assets/head.avtr
 ```
 
 ## What is real, what is a stand-in
@@ -44,6 +45,24 @@ node tools/preview.mjs --out preview.png --yaw 0.3 --preset talk
 
 The last row is the one that matters for quality. Everything else is plumbing
 around a `.avtr` file whose interface is: *N gaussians + a blendshape rig*.
+
+## Use your own face
+
+The shipped character is procedural so the repo runs with no downloads, no GPU and
+no licence. To swap in a real one, you need a **rigged head mesh** — any GLB with
+ARKit shape keys (a scan + Faceit in Blender, or an avatar SDK export):
+
+```bash
+node tools/import-mesh.mjs --list --in me.glb
+node tools/import-mesh.mjs --in me.glb --out assets/me.avtr --count 40000
+node tools/check-avatar.mjs assets/me.avtr
+```
+
+Then open `/client/?asset=/assets/me.avtr`. No code changes: channels are matched
+by name, morph targets become per-Gaussian deltas, and the client keeps working.
+
+Full walkthrough, including the FLAME-reconstruction route (LAM, Avat3r,
+GaussianAvatars) and the channel mapping table: **[docs/ASSET.md](docs/ASSET.md)**.
 
 ## Measured on this machine
 
@@ -65,9 +84,15 @@ client/        app shell, WebGL2 splatter, rig, idle motion, audio clock
 server/        static host + SSE orchestrator
 server/pipeline/   llm · tts · audio→blendshapes · wav
 shared/format.mjs  the .avtr container
-tools/         procedural rig generator, software renderer (PNG), PNG writer
+tools/
+  rig.mjs            procedural character
+  import-mesh.mjs    GLB with ARKit shape keys -> .avtr
+  glb.mjs            dependency-free glTF reader + PNG decoder
+  check-avatar.mjs   rig validator (CI-friendly)
+  preview.mjs        software renderer, no GPU
+  make-test-glb.mjs  synthetic rigged fixture for tests
 assets/        head.avtr
-docs/          architecture, protocol, asset format
+docs/          architecture, asset pipeline
 ```
 
 ## Known gaps
@@ -80,6 +105,10 @@ docs/          architecture, protocol, asset format
 - **Flat lighting.** Colours are baked SH-less; no relighting, no shadows.
 - **38k gaussians at 11 MB.** Fine on desktop, wasteful on mobile. Quantise and
   prune (see CVPR'26 mobile avatar work) before shipping.
+- **The importer is verified against a synthetic fixture**, not against every
+  commercial GLB. `--list` plus `check-avatar` localises most surprises.
+- **Gaze is shared between the eyes** — one `eyeLookX`, so no vergence. Split the
+  channel in `tools/rig.mjs` if you need it.
 - **`?static=1`** freezes the rig at rest — useful when you are debugging the asset.
 
 ## License

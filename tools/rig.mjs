@@ -87,7 +87,7 @@ function push(pos, normal, color, opacity, scale, tag) {
 
 // A continuous head shell. One surface for cranium + face + jaw means no seams
 // to tear when the jaw rotates.
-function headPoint(d) {
+export function headPoint(d) {
   let x = d[0] * 0.072;
   let y = d[1] * 0.096;
   let z = d[2] * 0.090;
@@ -120,7 +120,7 @@ function headPoint(d) {
   return [x, y, z];
 }
 
-function headNormal(d) {
+export function headNormal(d) {
   const e = 0.004;
   const p = headPoint(d);
   const tx = norm(sub(headPoint([d[0] + e, d[1], d[2]]), p));
@@ -375,7 +375,9 @@ function rigAt(p, tag, out) {
   const ax = Math.abs(x);
   const front = smooth(-0.03, 0.05, z);
 
-  const jawGeo = smooth(-0.022, -0.070, y) * front;
+  // Fade out below the jawline and never touch the neck/shirt: a jaw rotation
+  // applied to a gaussian 20 cm below the pivot produces metres of motion.
+  const jawGeo = smooth(-0.022, -0.070, y) * front * smooth(-0.150, -0.100, y);
   const jawTag = tag === 'lip' || tag === 'cavity' || tag === 'tongue' || tag === 'teeth';
   const jaw = jawTag ? Math.max(jawGeo, y < MOUTH.y ? 1 : 0) : jawGeo;
 
@@ -399,7 +401,7 @@ function rigAt(p, tag, out) {
   const D = (i, v) => { out.d[i * 3] = v[0]; out.d[i * 3 + 1] = v[1]; out.d[i * 3 + 2] = v[2]; };
 
   out.w[0] = clamp(jaw);
-  D(0, rotDelta(p, PIVOT_JAW, [1, 0, 0], 0.34));
+  D(0, rotDelta(p, PIVOT_JAW, [1, 0, 0], 0.26));
 
   out.w[1] = clamp(cornerL * (tag === 'lip' ? 1 : 0.75));
   D(1, [0.005, 0.008, 0.001]);
@@ -463,7 +465,7 @@ function assemble() {
     rigAt(g.pos, g.tag, scratch);
     for (let b = 0; b < nb; b++) {
       const w = scratch.w[b];
-      if (!(w > 0)) continue;
+      if (!(w > 2e-3)) continue;   // below this the displacement is sub-micron
       weights[i * nb + b] = w;
       deltas[(i * nb + b) * 3] = scratch.d[b * 3];
       deltas[(i * nb + b) * 3 + 1] = scratch.d[b * 3 + 1];

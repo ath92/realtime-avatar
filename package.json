@@ -8,6 +8,9 @@
     "start": "node server/server.mjs",
     "build": "node tools/make-avatar.mjs",
     "preview": "node tools/preview.mjs --out preview.png --yaw 0.2 --dist 0.62",
+    "import": "node tools/import-mesh.mjs",
+    "check": "node tools/check-avatar.mjs assets/head.avtr",
+    "fixture": "node tools/make-test-glb.mjs --out /tmp/test-head.glb && node tools/import-mesh.mjs --in /tmp/test-head.glb --out /tmp/test-head.avtr",
     "dev": "node tools/make-avatar.mjs && node server/server.mjs"
   },
   "engines": {
