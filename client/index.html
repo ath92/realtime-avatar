@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<title>avatar — realtime gaussian head</title>
+<link rel="stylesheet" href="./style.css" />
+</head>
+<body>
+
+<canvas id="view"></canvas>
+
+<header class="bar">
+  <div class="brand">
+    <span class="dot"></span>
+    <span class="name">avatar</span>
+    <span class="sub">gaussian head · webgl2</span>
+  </div>
+  <div id="status" class="pill">booting</div>
+</header>
+
+<section id="stats" class="stats"></section>
+
+<main class="dock">
+  <div id="transcript" class="transcript">
+    <div class="line system">Say something. Everything here runs locally — only your text leaves the page.</div>
+  </div>
+  <form class="composer" onsubmit="return false">
+    <input id="input" type="text" autocomplete="off" spellcheck="false"
+           placeholder="Ask the avatar something…" />
+    <button id="send" type="button" aria-label="Send">↵</button>
+  </form>
+  <div class="hint">drag to orbit · scroll to zoom</div>
+</main>
+
+<script type="module" src="./app.js"></script>
+</body>
+</html>

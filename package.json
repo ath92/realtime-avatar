@@ -1,0 +1,16 @@
+{
+  "name": "avatar",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Realtime Gaussian-splatting head avatar you can talk to, rendered in the browser.",
+  "scripts": {
+    "start": "node server/server.mjs",
+    "build": "node tools/make-avatar.mjs",
+    "preview": "node tools/preview.mjs --out preview.png --yaw 0.2 --dist 0.62",
+    "dev": "node tools/make-avatar.mjs && node server/server.mjs"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
