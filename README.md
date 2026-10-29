@@ -80,7 +80,16 @@ python tools/lam/export_avatar.py --lam-root /workspace/LAM \
 node tools/import-lam.mjs --in ~/Downloads/me-export --out assets/me.avtr
 ```
 
-Step-by-step: **[docs/RUNBOOK-LAM.md](docs/RUNBOOK-LAM.md)**.
+Or run the whole thing on a rented GPU without a shell — [Modal](https://modal.com)
+builds the image, grabs the GPU and hands the export back:
+
+```bash
+pip install modal && modal token new
+modal run tools/lam/modal_app.py --photo me.jpg
+```
+
+Docker is there too (`tools/lam/Dockerfile`). Step-by-step for both:
+**[docs/RUNBOOK-LAM.md](docs/RUNBOOK-LAM.md)**.
 
 ## Measured on this machine
 
@@ -108,6 +117,8 @@ tools/
   import-lam.mjs     LAM FLAME-space Gaussians -> .avtr (re-binds the rig)
   arkit-map.mjs      ARKit 52 -> rig 16 channel mapping, shared by both
   lam/export_avatar.py   runs on the GPU box, dumps what the importer needs
+  lam/modal_app.py       one-command GPU run, no SSH
+  lam/Dockerfile         same thing without Modal
   glb.mjs            dependency-free glTF reader + PNG decoder
   check-avatar.mjs   rig validator (CI-friendly)
   preview.mjs        software renderer, no GPU
