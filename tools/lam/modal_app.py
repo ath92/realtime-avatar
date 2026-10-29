@@ -1,26 +1,25 @@
 """Run the LAM export on a rented GPU without touching a shell.
 
-    pip install modal
-    modal token new                     # one browser click, once ever
-    modal run tools/lam/modal_app.py --photo me.jpg
+    uvx modal token new                      # once, one browser click
+    uvx modal run tools/lam/modal_app.py --photo me.jpg
 
-Modal builds the image (once, ~40 min, cached after), provisions a GPU,
-downloads the LAM assets into a persistent Volume (once), runs the export, and
+Modal builds the image (once, ~40 min, cached after), provisions a GPU, downloads
+the LAM assets into a persistent Volume (once, ~1.5 GB), runs the export, and
 writes ./me-export back to your machine. Then:
 
     node tools/import-lam.mjs --in ./me-export --out assets/me.avtr
 
-Cost is the GPU minutes only — a few cents per avatar once the image is cached.
+Requires an Image Builder Version that still supports Python 3.10 — LAM's deps are
+3.10-era and the 2026.10 builder rejects them at deploy time. Set it in
+modal.com -> workspace settings -> Image Builder Version.
 
 Nothing here is exercised by the repo's tests: it needs a GPU and a Modal
-account. If the image build fails, the log line that failed is usually enough
-for a one-line fix.
+account. If a run fails, the failing log line is usually enough for a one-line fix.
 """
 
 from __future__ import annotations
 
 import io
-import os
 import subprocess
 import tarfile
 from pathlib import Path
@@ -33,15 +32,9 @@ LAM_COMMIT = "339573649dd93df4cba8093a964e85a80d1b61f3"  # pinned: LAM's API mov
 app = modal.App("lam-avatar")
 
 # LAM pins a Python 3.10-era stack (numpy 1.23, tensorflow 2.12, chumpy), so the
-# image has to be 3.10. That means the workspace's **Image Builder Version** must
-# be one that still supports 3.10 - the current one (2026.10) supports 3.11+ and
-# rejects the image at deploy time, whatever base you pick.
-#
-#   modal.com -> workspace settings -> Image Builder Version -> an older one
-#
-# The base below is the official PyTorch image: it ships Python 3.10 and the exact
-# torch/CUDA pair LAM's installer would have built anyway. Do not add
-# `add_python=` here - that only narrows the problem.
+# image has to be 3.10, which is why the workspace's Image Builder Version must
+# still support it. The base below is the official PyTorch image: Python 3.10 plus
+# the exact torch/CUDA pair LAM's installer would have produced anyway.
 image = (
     modal.Image.from_registry("pytorch/pytorch:2.3.0-cuda12.1-cudnn8-devel")
     .apt_install(
@@ -62,42 +55,80 @@ image = (
 )
 
 cache = modal.Volume.from_name("lam-assets", create_if_missing=True)
-HF = {"HF_HOME": "/cache/hf"}
+
+# LAM's README unpacks LAM_assets.tar then thirdparty_models.tar. The human model
+# tarball carries the FLAME template.
+TARBALLS = ("LAM_assets.tar", "LAM_human_model.tar", "thirdparty_models.tar")
+MODEL_DIR = "/cache/model_zoo/lam_models/releases/lam/lam-20k/step_045500"
 
 
 def _ensure_assets() -> str:
-    """Download the FLAME template, sample motions and weights into the volume."""
-    marker = Path("/cache/.ready")
+    """Download and unpack everything into the volume. Runs once per workspace."""
+    marker = Path("/cache/.ready-v2")
     if not marker.exists():
         subprocess.run(
-            ["python", "-c", """
+            ["python", "-c", f"""
 from huggingface_hub import hf_hub_download
-import tarfile, huggingface_hub
-for fname in ("LAM_assets.tar", "LAM_human_model.tar"):
+import os, tarfile
+for fname in {TARBALLS!r}:
     p = hf_hub_download("3DAIGC/LAM-assets", fname)
     with tarfile.open(p) as t:
         t.extractall("/cache")
+    os.remove(p)
     print("extracted", fname, flush=True)
 """],
             check=True,
         )
         marker.touch()
 
-    model_dir = Path("/cache/model_zoo/lam_models/releases/lam/lam-20k/step_045500")
-    if not model_dir.exists():
+    if not Path(MODEL_DIR).exists():
         subprocess.run(
-            ["python", "-c", """
+            ["python", "-c", f"""
 from huggingface_hub import snapshot_download
-snapshot_download("3DAIGC/LAM-20K",
-                  local_dir="/cache/model_zoo/lam_models/releases/lam/lam-20k")
+snapshot_download("3DAIGC/LAM-20K", local_dir="{MODEL_DIR}")
 """],
             check=True,
         )
-    return str(model_dir)
+    return MODEL_DIR
 
 
-def _run(photo: bytes, name: str, gpu_minutes: int) -> bytes:
+def _link_tree(src: str, dst: str) -> None:
+    """Expose `src` at `dst` without copying, merging into an existing tree.
+
+    Both /opt/LAM/assets and /opt/LAM/model_zoo already exist in the repo, so we
+    cannot simply symlink the directory — link the children instead and recurse
+    where both sides are directories.
+    """
+    s, d = Path(src), Path(dst)
+    if not s.exists():
+        return
+    d.mkdir(parents=True, exist_ok=True)
+    for child in s.iterdir():
+        target = d / child.name
+        if child.is_dir():
+            _link_tree(str(child), str(target))
+        else:
+            if target.is_symlink():
+                target.unlink()
+            elif target.exists():
+                continue
+            target.symlink_to(child)
+
+
+def _run(photo: bytes, name: str) -> bytes:
+    import torch
+
+    if not torch.cuda.is_available():
+        raise RuntimeError(
+            "no GPU in the container. The NGC base image always prints "
+            "'NVIDIA Driver was not detected' at boot, so this check is the "
+            "reliable one — it means the function really did not get a GPU."
+        )
+    print(f"[gpu] {torch.cuda.get_device_name(0)}", flush=True)
+
     model_dir = _ensure_assets()
+    _link_tree("/cache/assets", "/opt/LAM/assets")
+    _link_tree("/cache/model_zoo", "/opt/LAM/model_zoo")
 
     work = Path("/tmp/work")
     work.mkdir(parents=True, exist_ok=True)
@@ -105,14 +136,6 @@ def _run(photo: bytes, name: str, gpu_minutes: int) -> bytes:
     photo_path.write_bytes(photo)
     out = work / "export"
     out.mkdir(exist_ok=True)
-
-    # LAM expects its assets next to its own tree
-    for src, dst in [("/cache/assets", "/opt/LAM/assets"), ("/cache", "/opt/LAM/model_zoo")]:
-        p = Path(dst)
-        if p.is_symlink() or p.exists():
-            if p.is_symlink():
-                p.unlink()
-        p.symlink_to(src)
 
     cmd = [
         "python", "/opt/avatarhq/export_avatar.py",
@@ -133,14 +156,14 @@ def _run(photo: bytes, name: str, gpu_minutes: int) -> bytes:
     return buf.getvalue()
 
 
-@app.function(image=image, volumes={"/cache": cache}, timeout=3 * 60 * 60)
+@app.function(image=image, gpu="A10G", volumes={"/cache": cache}, timeout=3 * 60 * 60)
 def export_a10g(photo: bytes, name: str) -> bytes:
-    return _run(photo, name, 0)
+    return _run(photo, name)
 
 
 @app.function(image=image, gpu="A100-40GB", volumes={"/cache": cache}, timeout=3 * 60 * 60)
 def export_a100(photo: bytes, name: str) -> bytes:
-    return _run(photo, name, 0)
+    return _run(photo, name)
 
 
 @app.local_entrypoint()
