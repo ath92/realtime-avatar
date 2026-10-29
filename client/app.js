@@ -12,6 +12,7 @@ const canvas = $('#view');
 const logEl = $('#transcript');
 const inputEl = $('#input');
 const sendEl = $('#send');
+const resetEl = $('#reset');
 const statusEl = $('#status');
 const statsEl = $('#stats');
 
@@ -36,6 +37,10 @@ const state = {
   turnSentAt: 0,
   firstAudioMs: null,
   pendingSegments: 0,
+  turnAbort: null,
+  turnGen: 0,
+  history: [],
+  health: null,
 };
 
 // ---------------------------------------------------------------- bootstrap
@@ -53,7 +58,39 @@ async function main() {
   statusEl.textContent = 'ready';
   requestAnimationFrame(loop);
 
+  loadHealth();
   window.addEventListener('resize', () => state.renderer.resize());
+}
+
+// ---------------------------------------------------------------- providers
+
+async function loadHealth() {
+  try {
+    const res = await fetch('/api/health', { cache: 'no-store' });
+    if (!res.ok) return;
+    const health = await res.json();
+    state.health = health;
+
+    const llm = health.llm || {};
+    const tts = health.tts || {};
+    const voice = tts.voiceName || tts.voiceId || tts.voice || tts.model || '';
+    const llmLabel = `${llm.provider || '?'}${llm.model ? ` · ${llm.model}` : ''}`;
+    const ttsLabel = `${tts.provider || '?'}${voice ? ` · ${voice}` : ''}`;
+
+    if (llm.provider === 'stub') {
+      appendSystem(`No LLM key configured, so replies are canned. Put OPENAI_API_KEY or ANTHROPIC_API_KEY in .env and restart. Voice: ${ttsLabel}.`);
+    } else if (tts.provider === 'none' || tts.available === false) {
+      appendSystem(`Voice: ${ttsLabel}${tts.available === false ? ' (not configured)' : ' (synthetic)'}. Set ELEVENLABS_API_KEY in .env for real speech. LLM: ${llmLabel}.`);
+    } else {
+      appendSystem(`LLM: ${llmLabel} · voice: ${ttsLabel}`);
+    }
+
+    if (llm.available === false) {
+      appendSystem(`warning: ${llm.provider} has no key — check .env before talking to it.`);
+    }
+  } catch {
+    // Health is best-effort; the avatar still renders without it.
+  }
 }
 
 // ---------------------------------------------------------------- rendering
@@ -109,7 +146,12 @@ function updateHud() {
 
 // ---------------------------------------------------------------- transport
 
-async function postTurn(text) {
+const HISTORY_MAX = 16;
+let turnReply = '';
+let turnError = false;
+let currentLine = null;
+
+async function postTurn(text, signal, gen) {
   state.turnSentAt = performance.now();
   state.firstAudioMs = null;
   state.pendingSegments = 0;
@@ -117,7 +159,8 @@ async function postTurn(text) {
   const res = await fetch('/api/turn', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ text }),
+    body: JSON.stringify({ text, history: state.history.slice(-HISTORY_MAX) }),
+    signal,
   });
   if (!res.ok || !res.body) throw new Error(`server ${res.status}`);
 
@@ -127,15 +170,22 @@ async function postTurn(text) {
 
   const handle = (ev, data) => {
     if (ev === 'token') {
+      if (gen !== state.turnGen) return;
+      turnReply += data.text;
       appendToken(data.text);
     } else if (ev === 'segment') {
+      if (gen !== state.turnGen) return;
       state.pendingSegments++;
       if (state.firstAudioMs === null) state.firstAudioMs = performance.now() - state.turnSentAt;
-      loadSegment(data).finally(() => { state.pendingSegments--; });
+      loadSegment(data, gen, signal).finally(() => {
+        state.pendingSegments = Math.max(0, state.pendingSegments - 1);
+      });
     } else if (ev === 'error') {
-      appendSystem(`error: ${data.message}`);
+      if (gen !== state.turnGen) return;
+      turnError = true;
+      appendSystem(`error (${data.stage || 'server'}): ${data.message}`);
     } else if (ev === 'done') {
-      finishTurn();
+      finishTurn(text, gen);
     }
   };
 
@@ -159,15 +209,21 @@ async function postTurn(text) {
   }
 }
 
-async function loadSegment(seg) {
+async function loadSegment(seg, gen, signal) {
+  if (gen !== state.turnGen) return;
   try {
-    await state.speaker.enqueue({ audioUrl: seg.audio, framesUrl: seg.frames });
+    await state.speaker.enqueue({
+      audioUrl: seg.audio,
+      framesUrl: seg.frames,
+      signal,
+      isCurrent: () => gen === state.turnGen,
+    });
   } catch (err) {
-    appendSystem(`audio failed: ${err.message}`);
+    if (err.name !== 'AbortError' && gen === state.turnGen) {
+      appendSystem(`audio failed: ${err.message}`);
+    }
   }
 }
-
-let currentLine = null;
 
 function appendToken(text) {
   if (!currentLine) {
@@ -180,8 +236,22 @@ function appendToken(text) {
   logEl.scrollTop = logEl.scrollHeight;
 }
 
-function finishTurn() {
+function finishTurn(text, gen) {
+  if (gen !== state.turnGen) return;
+
+  // Only commit complete, error-free turns to the model's conversation history.
+  if (!turnError && turnReply.trim()) {
+    state.history.push(
+      { role: 'user', content: text },
+      { role: 'assistant', content: turnReply.trim() },
+    );
+    if (state.history.length > HISTORY_MAX) {
+      state.history.splice(0, state.history.length - HISTORY_MAX);
+    }
+  }
   currentLine = null;
+  turnReply = '';
+  turnError = false;
 }
 
 function appendSystem(text) {
@@ -211,14 +281,43 @@ async function submit() {
   state.speaker.ensure();
   state.speaker.reset();
   state.idle.reset?.();
+
+  // A new turn interrupts the previous one: stop its audio, abort its SSE
+  // stream (the server aborts the provider calls when the socket closes), and
+  // ignore any segment that was already in flight.
+  if (state.turnAbort) state.turnAbort.abort();
+  const controller = new AbortController();
+  state.turnAbort = controller;
+  const gen = ++state.turnGen;
+  turnReply = '';
+  turnError = false;
+
   try {
-    await postTurn(text);
+    await postTurn(text, controller.signal, gen);
   } catch (err) {
-    appendSystem(`request failed: ${err.message}`);
+    if (err.name !== 'AbortError' && gen === state.turnGen) {
+      appendSystem(`request failed: ${err.message}`);
+    }
+  } finally {
+    if (state.turnAbort === controller) state.turnAbort = null;
   }
 }
 
+function newConversation() {
+  if (state.turnAbort) state.turnAbort.abort();
+  state.turnAbort = null;
+  state.turnGen++;
+  state.speaker.reset();
+  state.history.length = 0;
+  turnReply = '';
+  turnError = false;
+  currentLine = null;
+  state.pendingSegments = 0;
+  logEl.innerHTML = '<div class="line system">New conversation. History cleared.</div>';
+}
+
 sendEl.addEventListener('click', submit);
+resetEl.addEventListener('click', newConversation);
 inputEl.addEventListener('keydown', (e) => {
   if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); submit(); }
 });

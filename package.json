@@ -14,7 +14,10 @@
     "dev": "node tools/make-avatar.mjs && node server/server.mjs",
     "import:lam": "node tools/import-lam.mjs",
     "fixture:lam": "node tools/make-test-lam.mjs --out /tmp/lam-test && node tools/import-lam.mjs --in /tmp/lam-test --out /tmp/lam-test.avtr",
-    "paint:mouth": "node tools/paint-mouth.mjs --in assets/me.avtr --out assets/me.avtr"
+    "paint:mouth": "node tools/paint-mouth.mjs --in assets/me.avtr --out assets/me.avtr",
+    "smoke": "node tools/smoke.mjs",
+    "voices": "node tools/voices.mjs",
+    "test": "node --test test/*.test.mjs"
   },
   "engines": {
     "node": ">=20"

@@ -4,6 +4,7 @@ node_modules/
 preview.png
 .env
 .env.*
+!.env.example
 
 # python bits (tooling only)
 .venv/
@@ -23,3 +24,5 @@ me*.jpeg
 me*.png
 me*.ply
 me*-export/
+mouth-open.jpeg
+*.ply

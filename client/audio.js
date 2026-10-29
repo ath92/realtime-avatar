@@ -37,14 +37,19 @@ export class Speaker {
     this.endAt = 0;
   }
 
-  async enqueue({ audioUrl, framesUrl, onLoaded }) {
+  async enqueue({ audioUrl, framesUrl, signal, isCurrent, onLoaded }) {
     const ctx = this.ensure();
     const [buf, frames] = await Promise.all([
-      fetch(audioUrl).then((r) => r.arrayBuffer()),
-      fetch(framesUrl).then((r) => r.json()),
+      fetch(audioUrl, { signal }).then((r) => r.arrayBuffer()),
+      fetch(framesUrl, { signal }).then((r) => r.json()),
     ]);
 
+    // A newer turn may have started while these were in flight.
+    if (signal?.aborted || (isCurrent && !isCurrent())) return null;
+
     const audio = await ctx.decodeAudioData(buf);
+    if (signal?.aborted || (isCurrent && !isCurrent())) return null;
+
     const names = frames.names;
     const columns = Object.fromEntries(names.map((n, i) => [n, i]));
     const data = frames.frames.map((f) => Float32Array.from(f));

@@ -165,7 +165,7 @@ body[data-speaking="1"] .pill { color: var(--accent); }
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 7px 7px 7px 16px;
+  padding: 7px 7px 7px 10px;
   border: 1px solid var(--line);
   border-radius: 16px;
   background: var(--panel);
@@ -173,6 +173,19 @@ body[data-speaking="1"] .pill { color: var(--accent); }
   transition: border-color 0.15s;
 }
 .composer:focus-within { border-color: rgba(126, 224, 195, 0.45); }
+
+#reset {
+  width: 32px; height: 32px;
+  flex: none;
+  border: 0;
+  border-radius: 9px;
+  background: none;
+  color: var(--dim);
+  font-size: 15px;
+  cursor: pointer;
+  transition: color 0.15s, background 0.15s;
+}
+#reset:hover { color: var(--fg); background: rgba(255, 255, 255, 0.06); }
 
 #input {
   flex: 1;

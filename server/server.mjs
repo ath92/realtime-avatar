@@ -3,22 +3,29 @@
 //
 //   node server/server.mjs            # http://127.0.0.1:8787
 //
-// Deliberately dependency-free so the scaffold runs on a clean machine. The
-// only thing that needs replacing for production is the pipeline modules.
+// Provider selection lives in server/pipeline/{llm,tts}.mjs and is driven by
+// .env (see .env.example). With no keys it still runs on the stub LLM and
+// macOS `say`, which is what keeps the quickstart dependency-free.
 
 import { createServer } from 'node:http';
 import { readFile, stat } from 'node:fs/promises';
+import { readdirSync } from 'node:fs';
 import { join, extname, resolve, normalize } from 'node:path';
 import { gzipSync } from 'node:zlib';
 import { fileURLToPath } from 'node:url';
-import { speak, ttsAvailable } from './pipeline/tts.mjs';
+import { loadEnv } from './env.mjs';
+import { speak, ttsInfo } from './pipeline/tts.mjs';
 import { analyze, toJSON } from './pipeline/a2e.mjs';
 import { readWav } from './pipeline/wav.mjs';
-import { streamReply } from './pipeline/llm.mjs';
+import { streamReply, sanitizeHistory, llmInfo } from './pipeline/llm.mjs';
+import { isAbortError } from './pipeline/http.mjs';
+
+const envLoad = loadEnv();
 
 const ROOT = resolve(fileURLToPath(new URL('..', import.meta.url)));
 const PORT = Number(process.env.PORT || 8787);
 const HOST = process.env.HOST || '127.0.0.1';
+const MAX_BODY = 64 * 1024;
 
 const MIME = {
   '.html': 'text/html; charset=utf-8',
@@ -31,6 +38,17 @@ const MIME = {
   '.png': 'image/png',
   '.svg': 'image/svg+xml',
 };
+
+const ASSETS = (() => {
+  try {
+    return readdirSync(join(ROOT, 'assets'))
+      .filter((name) => name.endsWith('.avtr'))
+      .sort()
+      .map((name) => `/assets/${name}`);
+  } catch {
+    return [];
+  }
+})();
 
 // ---- in-memory media store (audio + frames per segment) -------------------
 const media = new Map();
@@ -106,10 +124,15 @@ function sseSend(res, event, data) {
 }
 
 // Cut the reply into speakable segments as tokens arrive, so the first audio
-// does not wait for the whole answer.
+// does not wait for the whole answer. Scan past abbreviations ("e.g. ") and cut
+// at the first boundary that leaves enough text to sound like a phrase; a short
+// opening sentence is fine and gets audio started sooner.
 function findCut(buf) {
-  const m = /[.!?…]["')\]]?\s/.exec(buf);
-  if (m && m.index > 24) return m.index + m[0].length;
+  const boundaries = /[.!?…]["')\]]?\s/g;
+  let m;
+  while ((m = boundaries.exec(buf))) {
+    if (m.index >= 8) return m.index + m[0].length;
+  }
   if (buf.length > 150) {
     const i = buf.lastIndexOf(' ', 150);
     if (i > 60) return i + 1;
@@ -117,67 +140,118 @@ function findCut(buf) {
   return -1;
 }
 
+async function readJsonBody(req, limit = MAX_BODY) {
+  const chunks = [];
+  let size = 0;
+  for await (const chunk of req) {
+    size += chunk.length;
+    if (size > limit) {
+      const err = new Error('request body too large');
+      err.status = 413;
+      throw err;
+    }
+    chunks.push(chunk);
+  }
+  if (!size) return {};
+  try {
+    return JSON.parse(Buffer.concat(chunks).toString('utf8'));
+  } catch {
+    const err = new Error('invalid JSON body');
+    err.status = 400;
+    throw err;
+  }
+}
+
 // ---- turn handler ---------------------------------------------------------
 async function handleTurn(req, res) {
   const t0 = performance.now();
-  let body = '';
-  for await (const chunk of req) {
-    body += chunk;
-    if (body.length > 8192) break;
+
+  let payload;
+  try {
+    payload = await readJsonBody(req);
+  } catch (err) {
+    res.writeHead(err.status || 400, { 'Content-Type': 'application/json' })
+      .end(JSON.stringify({ error: err.message }));
+    return;
   }
-  let text = 'hello';
-  try { text = (JSON.parse(body || '{}').text || '').trim() || 'hello'; } catch { /* ignore */ }
+
+  const text = String(payload.text || '').trim().slice(0, 8000) || 'hello';
+  const history = sanitizeHistory(payload.history);
 
   sseInit(res);
   let closed = false;
-  res.on('close', () => { closed = true; });
+  const controller = new AbortController();
+  res.on('close', () => {
+    closed = true;
+    controller.abort();
+  });
+
+  const ping = setInterval(() => {
+    if (!closed) { try { res.write(': ping\n\n'); } catch { /* closed */ } }
+  }, 15_000);
 
   const send = (ev, data) => {
     if (closed) return;
     try { sseSend(res, ev, data); } catch { closed = true; }
   };
 
-  sseSend(res, 'start', { t: 0, tts: ttsAvailable() });
+  sseSend(res, 'start', { t: 0, tts: ttsInfo(), llm: llmInfo() });
 
   let chain = Promise.resolve();
   let seq = 0;
   let firstAudioAt = null;
+  let previousText = '';
 
   const emitSegment = (segText) => {
     chain = chain.then(async () => {
       if (closed) return;
-      const tTts = performance.now();
-      const speech = await speak(segText);
-      if (!speech) return;
-      const ttsMs = performance.now() - tTts;
+      try {
+        const tTts = performance.now();
+        const speech = await speak(segText, {
+          signal: controller.signal,
+          previousText,
+        });
+        if (!speech || closed) return;
+        const ttsMs = performance.now() - tTts;
 
-      const tA2e = performance.now();
-      const { samples, sampleRate, duration } = readWav(speech.wav);
-      const a2e = analyze(samples, sampleRate);
-      const a2eMs = performance.now() - tA2e;
+        const tA2e = performance.now();
+        const { samples, sampleRate, duration } = readWav(speech.wav);
+        const a2e = analyze(samples, sampleRate);
+        const a2eMs = performance.now() - tA2e;
 
-      const id = putMedia({ wav: speech.wav, frames: toJSON(a2e) });
-      if (firstAudioAt === null) firstAudioAt = performance.now() - t0;
-      send('segment', {
-        seq: seq++,
-        text: segText,
-        audio: `/media/${id}.wav`,
-        frames: `/media/${id}.json`,
-        duration,
-        fps: a2e.fps,
-        t: Math.round(performance.now() - t0),
-        ttsMs: Math.round(ttsMs),
-        a2eMs: Math.round(a2eMs),
-        first: firstAudioAt !== null && seq === 1,
-      });
-    }).catch((err) => {
-      send('error', { message: String(err && err.message || err) });
+        const id = putMedia({ wav: speech.wav, frames: toJSON(a2e) });
+        const seqNo = seq++;
+        if (firstAudioAt === null) firstAudioAt = performance.now() - t0;
+        previousText = segText;
+
+        send('segment', {
+          seq: seqNo,
+          text: segText,
+          audio: `/media/${id}.wav`,
+          frames: `/media/${id}.json`,
+          duration,
+          fps: a2e.fps,
+          t: Math.round(performance.now() - t0),
+          ttsMs: Math.round(ttsMs),
+          a2eMs: Math.round(a2eMs),
+          provider: speech.provider,
+          voice: speech.voiceId || speech.voice || '',
+          cached: Boolean(speech.cached),
+          first: seqNo === 0,
+        });
+      } catch (err) {
+        if (closed || isAbortError(err)) return;
+        send('error', {
+          stage: 'tts',
+          message: String(err && err.message || err),
+        });
+      }
     });
   };
 
   try {
     let buf = '';
-    for await (const tok of streamReply(text)) {
+    for await (const tok of streamReply(text, { history, signal: controller.signal })) {
       if (closed) break;
       buf += tok;
       send('token', { text: tok, t: Math.round(performance.now() - t0) });
@@ -189,10 +263,24 @@ async function handleTurn(req, res) {
       }
     }
     if (buf.trim()) emitSegment(buf.trim());
-    await chain;
-    send('done', { t: Math.round(performance.now() - t0), firstAudioAt: firstAudioAt && Math.round(firstAudioAt) });
   } catch (err) {
-    send('error', { message: String(err && err.message || err) });
+    if (!closed && !isAbortError(err)) {
+      send('error', {
+        stage: 'llm',
+        message: String(err && err.message || err),
+      });
+    }
+  } finally {
+    clearInterval(ping);
+  }
+
+  // Wait for any segment already queued before closing the stream.
+  await chain.catch(() => {});
+  if (!closed) {
+    send('done', {
+      t: Math.round(performance.now() - t0),
+      firstAudioAt: firstAudioAt === null ? null : Math.round(firstAudioAt),
+    });
   }
   res.end();
 }
@@ -204,12 +292,16 @@ const server = createServer(async (req, res) => {
   if (req.method === 'POST' && url.pathname === '/api/turn') return handleTurn(req, res);
 
   if (url.pathname === '/api/health') {
-    return res.writeHead(200, { 'Content-Type': 'application/json' }).end(JSON.stringify({
+    const body = JSON.stringify({
       ok: true,
-      tts: ttsAvailable() ? 'say' : 'babble',
-      llm: process.env.LLM_PROVIDER || 'stub',
-      assets: ['/assets/head.avtr'],
-    }));
+      tts: ttsInfo(),
+      llm: llmInfo(),
+      assets: ASSETS,
+    });
+    return res.writeHead(200, {
+      'Content-Type': 'application/json; charset=utf-8',
+      'Cache-Control': 'no-store',
+    }).end(body);
   }
 
   const m = /^\/media\/([a-z0-9]+)\.(wav|json)$/.exec(url.pathname);
@@ -231,9 +323,12 @@ const server = createServer(async (req, res) => {
 
 function listen(port, attempts = 0) {
   server.listen(port, HOST, () => {
+    const tts = ttsInfo();
+    const llm = llmInfo();
     console.log(`avatar  http://${HOST}:${port}/client/`);
-    console.log(`  tts  ${ttsAvailable() ? 'macOS say' : 'synthetic babble (install a real TTS)'}`);
-    console.log(`  llm  ${process.env.LLM_PROVIDER || 'stub'}${process.env.OPENAI_API_KEY ? ' (key present)' : ''}`);
+    console.log(`  llm  ${llm.provider} · ${llm.model}${llm.available ? '' : ' (no key)'}`);
+    console.log(`  tts  ${tts.provider}${tts.model ? ` · ${tts.model}` : ''}${tts.available ? '' : ' (unavailable)'}`);
+    if (envLoad.loaded) console.log(`  env  ${envLoad.path} (${envLoad.count} vars loaded)`);
   });
   server.once('error', (err) => {
     if (err.code === 'EADDRINUSE' && attempts < 10) {

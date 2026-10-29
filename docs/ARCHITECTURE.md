@@ -19,21 +19,46 @@ jitters. If you take one thing from this repo, take this.
 ## Turn lifecycle
 
 ```
-POST /api/turn {text}
-  ← event: start    {t, tts}
-  ← event: token    {text, t}                    … many, as the LLM streams
-  ← event: segment  {seq, audio, frames, duration, fps, ttsMs, a2eMs}
+POST /api/turn {text, history[]}
+  ← event: start    {t, tts, llm}                 resolved providers + model
+  ← event: token    {text, t}                     … many, as the LLM streams
+  ← event: segment  {seq, audio, frames, duration, fps, ttsMs, a2eMs,
+                     provider, voice, cached, first}
+  ← event: error    {stage, message}              llm or tts failure
   ← event: done     {t, firstAudioAt}
 ```
 
 The server cuts the token stream into sentences (`findCut` in `server.mjs`) and
 pipes each through TTS → analysis → media store *as it arrives*, in order, on a
 promise chain. So audio for sentence 1 starts playing while sentence 3 is still
-being synthesised.
+being synthesised. `findCut` scans past short abbreviations and cuts at the first
+boundary that leaves a phrase, so a brief opener like "Hello there." gets audio
+started immediately instead of waiting for the whole reply.
+
+Conversation history arrives with the turn (the browser keeps the last 16
+messages), is sanitised in `pipeline/llm.mjs`, and is not stored server-side. The
+client aborts the previous turn when a new one starts; the server aborts the
+in-flight LLM request and any queued TTS calls when the SSE socket closes, so a
+cancelled turn stops costing tokens and characters.
 
 `segment.audio` and `segment.frames` are plain GETs under `/media/<id>`. Media
 lives in a bounded in-memory map (96 entries, FIFO) — swap for object storage
 when you have more than one process.
+
+### Provider adapters
+
+`pipeline/llm.mjs` and `pipeline/tts.mjs` are the only vendor-aware code. Each
+exposes one async contract:
+
+```js
+streamReply(text, { history, signal }) -> AsyncIterable<string>
+speak(text, { previousText, signal }) -> { wav, sampleRate, duration, ... }
+```
+
+OpenAI-compatible and Anthropic streaming share the SSE reader in
+`pipeline/http.mjs`; ElevenLabs returns raw PCM, which is wrapped as a 32-bit
+float WAV for WebAudio. Retries, timeouts, LRU caching, and error hints live in
+the adapters. See **[PROVIDERS.md](PROVIDERS.md)** for configuration.
 
 ### frames format
 
