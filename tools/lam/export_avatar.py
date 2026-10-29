@@ -33,6 +33,95 @@ import traceback
 import numpy as np
 
 
+def prepare_photo(image_path, out_dir, mask_path=None, no_mask=False):
+    """Return a JPG path with a matching `.png` mask beside it.
+
+    LAM's preprocess_image() uses the image's alpha if it has one, else the mask
+    file, else rembg (not installed). We take the third option off the table by
+    always producing a mask: a supplied one, or a GrabCut matte seeded by the
+    face box. OpenCV is already a hard dependency of LAM, so this adds nothing.
+    """
+    import cv2
+    import numpy as np
+
+    os.makedirs(out_dir, exist_ok=True)
+    stem = os.path.splitext(os.path.basename(image_path))[0]
+    out_jpg = os.path.join(out_dir, stem + '.jpg')
+    out_png = os.path.join(out_dir, stem + '.png')
+
+    rgb = cv2.imread(image_path, cv2.IMREAD_COLOR)
+    if rgb is None:
+        raise SystemExit(f'cannot read image: {image_path}')
+    cv2.imwrite(out_jpg, rgb, [cv2.IMWRITE_JPEG_QUALITY, 95])
+
+    if no_mask:
+        cv2.imwrite(out_png, np.full(rgb.shape[:2], 255, np.uint8))
+        return out_jpg
+
+    if mask_path:
+        m = cv2.imread(mask_path, cv2.IMREAD_GRAYSCALE)
+        if m is None:
+            raise SystemExit(f'cannot read mask: {mask_path}')
+        if m.shape != rgb.shape[:2]:
+            m = cv2.resize(m, (rgb.shape[1], rgb.shape[0]), interpolation=cv2.INTER_NEAREST)
+        cv2.imwrite(out_png, (m > 127).astype(np.uint8) * 255)
+        return out_jpg
+
+    h, w = rgb.shape[:2]
+    # work at a sane resolution: GrabCut is O(pixels) and this only produces a matte
+    scale = min(1.0, 768.0 / max(h, w))
+    small = cv2.resize(rgb, (int(w * scale), int(h * scale)), interpolation=cv2.INTER_AREA)
+    sh, sw = small.shape[:2]
+
+    rect = None
+    try:
+        gray = cv2.cvtColor(small, cv2.COLOR_BGR2GRAY)
+        cascade = cv2.CascadeClassifier(
+            os.path.join(cv2.data.haarcascades, 'haarcascade_frontalface_default.xml'))
+        faces = cascade.detectMultiScale(gray, 1.1, 5,
+                                         minSize=(max(24, int(min(sh, sw) * 0.10)),) * 2)
+        if len(faces):
+            fx, fy, fw, fh = max(faces, key=lambda f: f[2] * f[3])
+            # expand to head + shoulders, clamped
+            side = int(max(fw, fh) * 2.6)
+            cx, cy = fx + fw // 2, fy + fh // 2 + int(fh * 0.35)
+            x0 = max(0, cx - side // 2); y0 = max(0, cy - side // 2)
+            x1 = min(sw, cx + side // 2); y1 = min(sh, cy + side // 2)
+            if x1 - x0 > 20 and y1 - y0 > 20:
+                rect = (x0, y0, x1 - x0, y1 - y0)
+        print(f'[mask] face box {"found" if rect else "not found"}', flush=True)
+    except Exception as exc:  # noqa: BLE001 - any cv2 failure falls back to a rect
+        print(f'[mask] detection failed ({exc}); using a centred rect', flush=True)
+
+    if rect is None:
+        side = int(min(sh, sw) * 0.86)
+        rect = ((sw - side) // 2, max(0, int(sh * 0.04)), side, min(side, sh - 4))
+
+    alpha = None
+    try:
+        gc = np.zeros((sh, sw), np.uint8)
+        bgd, fgd = np.zeros((1, 65), np.float64), np.zeros((1, 65), np.float64)
+        cv2.grabCut(small, gc, rect, bgd, fgd, 5, cv2.GC_INIT_WITH_RECT)
+        alpha = np.where((gc == cv2.GC_FGD) | (gc == cv2.GC_PR_FGD), 255, 0).astype(np.uint8)
+        frac = float((alpha > 0).mean())
+        print(f'[mask] grabcut kept {frac * 100:.0f}% of the frame', flush=True)
+        if frac < 0.03 or frac > 0.97:
+            alpha = None
+    except Exception as exc:  # noqa: BLE001
+        print(f'[mask] grabcut failed ({exc})', flush=True)
+
+    if alpha is None:
+        alpha = np.zeros((sh, sw), np.uint8)
+        cv2.ellipse(alpha, (sw // 2, int(sh * 0.52)),
+                    (int(sw * 0.42), int(sh * 0.46)), 0, 0, 360, 255, -1)
+
+    alpha = cv2.GaussianBlur(alpha, (0, 0), sigmaX=max(2.0, min(sh, sw) / 200.0))
+    if scale < 1.0:
+        alpha = cv2.resize(alpha, (w, h), interpolation=cv2.INTER_LINEAR)
+    cv2.imwrite(out_png, alpha)
+    return out_jpg
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--lam-root', required=True, help='path to the LAM checkout')
@@ -41,6 +130,8 @@ def main():
     ap.add_argument('--image', required=True, help='your photo')
     ap.add_argument('--motion', required=True, help='a motion sequence dir, e.g. assets/sample_motion/export/Look_In_My_Eyes')
     ap.add_argument('--out', required=True, help='output directory')
+    ap.add_argument('--mask', default=None, help='foreground mask (white = face); generated if omitted')
+    ap.add_argument('--no-mask', action='store_true', help='skip masking entirely')
     args = ap.parse_args()
 
     lam_root = os.path.abspath(args.lam_root)
@@ -49,13 +140,23 @@ def main():
     os.environ['PYTHONPATH'] = lam_root + ':' + os.environ.get('PYTHONPATH', '')
     os.environ.setdefault('APP_ENABLED', '')
 
+    # LAM wants a foreground mask next to the photo. If it finds none it imports
+    # rembg, which is not in its requirements. So we always hand it a JPG plus a
+    # same-named PNG mask, which is the path its loader derives:
+    #   mask_path = image_path.replace('/images/', '/fg_masks/').replace('.jpg', '.png')
+    work = os.path.join(tempfile.mkdtemp(prefix='lam-photo-'), '')
+    photo = prepare_photo(args.image, work, args.mask, args.no_mask)
+
     # LAM's runner reads its configuration from the command line.
     sys.argv = [
         'lam.launch', 'infer.lam',
         '--config', args.config,
         f'model_name={args.model}',
-        f'image_input={os.path.abspath(args.image)}',
-        'export_video=False', 'export_mesh=False',
+        f'image_input={photo}',
+        # parse_configs asserts that at least one of these is set; the canonical
+        # Gaussians do not depend on either, so keep the cheapest one on.
+        'export_video=True', 'export_mesh=False',
+        'motion_img_dir=null',
         f'motion_seqs_dir={os.path.abspath(args.motion)}',
         'save_ply=False', 'save_img=False',
         'vis_motion=False', 'motion_img_need_mask=False',
@@ -80,7 +181,7 @@ def main():
     tmp = tempfile.mkdtemp(prefix='lam-export-')
     try:
         inferrer.infer_single(
-            os.path.abspath(args.image),
+            photo,
             motion_seqs_dir=os.path.abspath(args.motion),
             motion_img_dir=None,
             motion_video_read_fps=30,
