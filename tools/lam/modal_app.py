@@ -32,11 +32,16 @@ LAM_COMMIT = "339573649dd93df4cba8093a964e85a80d1b61f3"  # pinned: LAM's API mov
 
 app = modal.App("lam-avatar")
 
-# LAM pins a Python 3.10-era stack (numpy 1.23, tensorflow 2.12, chumpy), and
-# Modal's current image builder no longer *installs* 3.10 (it supports 3.11+).
-# So we take a base image that already ships 3.10 - the official PyTorch one,
-# which also happens to be the exact torch/CUDA combo LAM wants. Do not add
-# `add_python=` here.
+# LAM pins a Python 3.10-era stack (numpy 1.23, tensorflow 2.12, chumpy), so the
+# image has to be 3.10. That means the workspace's **Image Builder Version** must
+# be one that still supports 3.10 - the current one (2026.10) supports 3.11+ and
+# rejects the image at deploy time, whatever base you pick.
+#
+#   modal.com -> workspace settings -> Image Builder Version -> an older one
+#
+# The base below is the official PyTorch image: it ships Python 3.10 and the exact
+# torch/CUDA pair LAM's installer would have built anyway. Do not add
+# `add_python=` here - that only narrows the problem.
 image = (
     modal.Image.from_registry("pytorch/pytorch:2.3.0-cuda12.1-cudnn8-devel")
     .apt_install(

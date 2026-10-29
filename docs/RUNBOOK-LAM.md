@@ -32,6 +32,13 @@ if you want reproducibility.)
 Add `--gpu a100` if the 24 GB card runs out of memory. Cost is GPU-minutes: a few
 cents per avatar once the image is cached, plus the one-time build.
 
+**Known gotcha — Python 3.10.** LAM's pinned deps are 3.10-era, and Modal's image
+builder dropped 3.10 in the `2026.10` version: it rejects the image at deploy time
+even if your base image already ships 3.10. Before the first run, set
+**workspace settings → Image Builder Version** to an older version. It is a
+workspace-wide setting that affects every Modal image you build, and it is
+reversible.
+
 **What works without touching anything:** image build, GPU provisioning, asset
 download, export, and the tar coming back to `./me-export`.
 
