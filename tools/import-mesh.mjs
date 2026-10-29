@@ -254,6 +254,40 @@ for (let s = 0; s < n; s++) {
 function clamp01(v) { return v < 0 ? 0 : v > 1 ? 1 : v; }
 
 // ---- normalise ------------------------------------------------------------
+// FLAME exports are often z-up; detect it rather than trusting the node graph.
+let extZ = 0, extY = 0;
+{
+  let a = [Infinity, Infinity, Infinity], b = [-Infinity, -Infinity, -Infinity];
+  for (let i = 0; i < n; i++) {
+    for (let c = 0; c < 3; c++) {
+      const v = positions[i * 3 + c];
+      if (v < a[c]) a[c] = v;
+      if (v > b[c]) b[c] = v;
+    }
+  }
+  extY = b[1] - a[1];
+  extZ = b[2] - a[2];
+}
+if (extZ > extY * 1.15) {
+  // z-up -> y-up: (x, y, z) -> (x, z, -y)
+  for (let i = 0; i < n; i++) {
+    const y = positions[i * 3 + 1];
+    const z = positions[i * 3 + 2];
+    positions[i * 3 + 1] = z;
+    positions[i * 3 + 2] = -y;
+    const dy = deltas[i * nb * 3 + 1], dz = deltas[i * nb * 3 + 2];
+    void dy; void dz;
+  }
+  // rotate the deltas the same way
+  for (let i = 0; i < n * nb; i++) {
+    const y = deltas[i * 3 + 1];
+    const z = deltas[i * 3 + 2];
+    deltas[i * 3 + 1] = z;
+    deltas[i * 3 + 2] = -y;
+  }
+  console.log('  rotated  z-up -> y-up');
+}
+
 let minX = Infinity, minY = Infinity, minZ = Infinity;
 let maxX = -Infinity, maxY = -Infinity, maxZ = -Infinity;
 for (let i = 0; i < n; i++) {

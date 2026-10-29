@@ -58,20 +58,39 @@ function readAccessor(gltf, bin, index) {
   if (!comp) throw new Error(`unsupported componentType ${acc.componentType}`);
   const out = new Float32Array(acc.count * n);
 
-  if (acc.bufferView === undefined) return out; // sparse-only / zero-filled
-
-  const bv = gltf.bufferViews[acc.bufferView];
-  const base = (bv.byteOffset || 0) + (acc.byteOffset || 0);
-  const stride = bv.byteStride || n * comp.size;
   const dv = new DataView(bin.buffer, bin.byteOffset, bin.byteLength);
 
-  for (let i = 0; i < acc.count; i++) {
-    const row = base + i * stride;
-    for (let c = 0; c < n; c++) {
-      const v = comp.get(dv, row + c * comp.size);
-      out[i * n + c] = acc.normalized ? v / comp.norm : v;
+  if (acc.bufferView !== undefined) {
+    const bv = gltf.bufferViews[acc.bufferView];
+    const base = (bv.byteOffset || 0) + (acc.byteOffset || 0);
+    const stride = bv.byteStride || n * comp.size;
+    for (let i = 0; i < acc.count; i++) {
+      const row = base + i * stride;
+      for (let c = 0; c < n; c++) {
+        const v = comp.get(dv, row + c * comp.size);
+        out[i * n + c] = acc.normalized ? v / comp.norm : v;
+      }
     }
   }
+
+  // Sparse accessors store only the non-zero entries — Blender exports morph
+  // targets this way, and ignoring them makes every shape key look empty.
+  if (acc.sparse) {
+    const sp = acc.sparse;
+    const icomp = COMPONENT[sp.indices.componentType];
+    const ibv = gltf.bufferViews[sp.indices.bufferView];
+    const ibase = (ibv.byteOffset || 0) + (sp.indices.byteOffset || 0);
+    const vbv = gltf.bufferViews[sp.values.bufferView];
+    const vbase = (vbv.byteOffset || 0) + (sp.values.byteOffset || 0);
+    for (let k = 0; k < sp.count; k++) {
+      const idx = icomp.get(dv, ibase + k * icomp.size);
+      for (let c = 0; c < n; c++) {
+        const v = comp.get(dv, vbase + (k * n + c) * comp.size);
+        if (idx < acc.count) out[idx * n + c] = acc.normalized ? v / comp.norm : v;
+      }
+    }
+  }
+
   return out;
 }
 

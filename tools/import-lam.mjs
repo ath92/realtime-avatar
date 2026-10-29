@@ -178,7 +178,7 @@ function nearestBary(px, py, pz) {
   const gz = Math.floor((pz - minZ) / cell);
 
   let best = { b: [1, 0, 0], dist: Infinity, tri: -1 };
-  for (let r = 0; r <= 3; r++) {
+  for (let r = 0; r <= 6; r++) {
     for (let dx = -r; dx <= r; dx++) {
       for (let dy = -r; dy <= r; dy++) {
         for (let dz = -r; dz <= r; dz++) {

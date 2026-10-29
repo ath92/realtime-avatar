@@ -134,6 +134,12 @@ def main():
     ap.add_argument('--no-mask', action='store_true', help='skip masking entirely')
     args = ap.parse_args()
 
+    # LAM does dirname() on this path to get the sequence directory back, which
+    # only holds when it ends with a separator (inference.sh passes one).
+    motion = os.path.abspath(args.motion)
+    if not motion.endswith(os.sep):
+        motion += os.sep
+
     lam_root = os.path.abspath(args.lam_root)
     os.chdir(lam_root)
     sys.path.insert(0, lam_root)
@@ -153,7 +159,7 @@ def main():
         # [default] keys in parse_configs that inference.sh passes explicitly and
         # that are absent from the yaml
         'render_fps=30', 'render_views=1',
-        f'motion_seqs_dir={os.path.abspath(args.motion)}',
+        f'motion_seqs_dir={motion}',
         'save_ply=False', 'save_img=False',
         'vis_motion=False', 'motion_img_need_mask=False',
     ]
@@ -200,11 +206,25 @@ def main():
 
     inferrer.model.infer_single_view = hooked
 
+    # The ARKit basis is a slice of shapedirs, and getting that slice wrong is
+    # silent: you get plausible-looking but global, tiny displacements. Instead,
+    # record the exact animation_forward call the renderer makes and replay it
+    # with a one-hot expression — that is the deformation the model actually uses.
+    fm = inferrer.model.renderer.flame_model
+    orig_anim = fm.animation_forward
+    record = {}
+
+    def recording_anim(*a, **kw):
+        record.setdefault('call', (a, dict(kw)))
+        return orig_anim(*a, **kw)
+
+    fm.animation_forward = recording_anim
+
     tmp = tempfile.mkdtemp(prefix='lam-export-')
     try:
         inferrer.infer_single(
             tracked_image,
-            motion_seqs_dir=os.path.abspath(args.motion),
+            motion_seqs_dir=motion,
             motion_img_dir=None,
             motion_video_read_fps=30,
             export_video=False,
@@ -221,6 +241,7 @@ def main():
         return 1
     finally:
         inferrer.model.infer_single_view = original
+        fm.animation_forward = orig_anim
 
     res = captured.get('res')
     if res is None or 'cano_gs_lst' not in res:
@@ -229,7 +250,8 @@ def main():
 
     gs = res['cano_gs_lst'][0]
     fm = inferrer.model.renderer.flame_model
-    betas = captured['flame_params']['betas']
+    fp = captured['flame_params']
+    betas = fp['betas'] if 'betas' in fp else fp['shape']
 
     os.makedirs(args.out, exist_ok=True)
 
@@ -262,27 +284,49 @@ def main():
 
     np.save(os.path.join(args.out, 'gaussians.npy'), gaussians)
 
-    # --- FLAME mesh + basis ------------------------------------------------
-    with torch.no_grad():
-        verts = fm.get_cano_verts(shape_params=betas)[0]
-    verts = np_(verts)
-    faces = fm.faces.detach().cpu().numpy().astype(np.uint32)
+    # --- FLAME mesh + per-channel displacements ----------------------------
+    def replay(expr):
+        a, kw = record['call']
+        kw = dict(kw)
+        if 'expr' in kw:
+            kw['expr'] = expr
+        else:
+            a = list(a)
+            a[2] = expr
+            a = tuple(a)
+        out = fm.animation_forward(*a, **kw)
+        return out['animated'] if isinstance(out, dict) else out[0]
 
+    deltas = None
+    if 'call' in record:
+        with torch.no_grad():
+            base = replay(torch.zeros(1, 52, device=betas.device, dtype=betas.dtype))
+            frames = []
+            for k in range(52):
+                e = torch.zeros(1, 52, device=betas.device, dtype=betas.dtype)
+                e[0, k] = 1.0
+                frames.append((replay(e) - base)[0].detach().float().cpu().numpy())
+        deltas = np.stack(frames, 0)  # (52, V, 3)
+        verts = base[0].detach().float().cpu().numpy()
+        print(f'[deltas] replayed {len(frames)} channels, max {np.abs(deltas).max() * 1000:.1f} mm', flush=True)
+    else:
+        # fallback: read the basis directly (offsets taken from the model config)
+        with torch.no_grad():
+            verts = np_(fm.get_cano_verts(shape_params=betas)[0])
+        n_shape = int(fm.n_shape_params)
+        shapedirs = getattr(fm, 'shapedirs_up', None)
+        if shapedirs is None:
+            shapedirs = fm.shapedirs
+        if shapedirs.shape[0] != verts.shape[0]:
+            raise RuntimeError(
+                f'basis has {shapedirs.shape[0]} verts but the mesh has {verts.shape[0]}')
+        basis = shapedirs[:, :, n_shape:n_shape + 52]
+        deltas = basis.permute(2, 0, 1).detach().float().cpu().numpy()
+        print('[deltas] WARNING: animation_forward never fired; fell back to shapedirs slice', flush=True)
+
+    faces = fm.faces.detach().cpu().numpy().astype(np.uint32)
     np.save(os.path.join(args.out, 'verts.npy'), verts.astype(np.float32))
     np.save(os.path.join(args.out, 'faces.npy'), faces)
-
-    # ARKit basis lives right after the identity basis in shapedirs
-    n_shape = int(fm.n_shape_params)
-    # vertices are upsampled (20 018 for subdivide=1), so the basis must be too
-    shapedirs = getattr(fm, 'shapedirs_up', None)
-    if shapedirs is None:
-        shapedirs = fm.shapedirs
-    if shapedirs.shape[0] != verts.shape[0]:
-        raise RuntimeError(
-            f'basis has {shapedirs.shape[0]} verts but the mesh has {verts.shape[0]}; '
-            'FLAME tessellation mismatch')
-    basis = shapedirs[:, :, n_shape:n_shape + 52]
-    deltas = basis.permute(2, 0, 1).detach().float().cpu().numpy()  # (52, V, 3)
     np.save(os.path.join(args.out, 'deltas.npy'), deltas.astype(np.float32))
 
     arkit = [
