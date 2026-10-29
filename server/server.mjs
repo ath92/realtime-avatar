@@ -68,7 +68,9 @@ async function serveStatic(req, res, urlPath) {
     let body = await readFile(path);
     const headers = {
       'Content-Type': MIME[ext] || 'application/octet-stream',
-      'Cache-Control': ext === '.avtr' || ext === '.wav' ? 'public, max-age=3600' : 'no-cache',
+      // Avatars are rebuilt constantly during iteration; a stale .avtr in the
+      // browser cache looks exactly like a rendering bug.
+      'Cache-Control': ext === '.wav' ? 'public, max-age=3600' : 'no-cache',
       ETag: etag,
     };
 
