@@ -36,7 +36,9 @@ const fitHeight = Number(opt('fit', 0.30));
 const doCenter = !has('no-center');
 const minWeight = Number(opt('min-weight', 1e-6));
 
-const need = ['gaussians.npy', 'verts.npy', 'faces.npy', 'deltas.npy'];
+const basisPath = opt('basis', null);
+const need = ['gaussians.npy', 'verts.npy', 'faces.npy'];
+if (!basisPath) need.push('deltas.npy');
 for (const f of need) {
   if (!existsSync(join(dir, f))) {
     console.error(`missing ${join(dir, f)}\nrun tools/lam/export_avatar.py on the GPU box first`);
@@ -47,7 +49,7 @@ for (const f of need) {
 const G = loadNpy(join(dir, 'gaussians.npy'));   // (N, 14)
 const V = loadNpy(join(dir, 'verts.npy'));       // (V, 3)
 const F = loadNpy(join(dir, 'faces.npy'));       // (F, 3)
-const D = loadNpy(join(dir, 'deltas.npy'));      // (52, V, 3)
+const D = basisPath ? null : loadNpy(join(dir, 'deltas.npy'));  // (52, V, 3)
 
 if (G.shape.length !== 2 || G.shape[1] < 11) {
   console.error(`gaussians.npy should be (N, >=11): xyz, scale, rot, rgb, opacity`);
@@ -57,12 +59,67 @@ const stride = G.shape[1];
 const n = G.shape[0];
 const nv = V.shape[0];
 const nf = F.shape[0];
-if (D.shape[0] !== ARKIT_NAMES.length) {
-  console.warn(`warning: deltas has ${D.shape[0]} channels, expected ${ARKIT_NAMES.length}`);
+if (D) {
+  if (D.shape[0] !== ARKIT_NAMES.length) {
+    console.warn(`warning: deltas has ${D.shape[0]} channels, expected ${ARKIT_NAMES.length}`);
+  }
+  if (D.shape[1] !== nv) {
+    console.error(`deltas has ${D.shape[1]} vertices but verts.npy has ${nv} — mismatched dump`);
+    process.exit(1);
+  }
 }
-if (D.shape[1] !== nv) {
-  console.error(`deltas has ${D.shape[1]} vertices but verts.npy has ${nv} — mismatched dump`);
-  process.exit(1);
+
+// ---- channel deltas ------------------------------------------------------
+// A LAM avatar is driven by FLAME's 100-d expression basis, which has no names.
+// Its *shape keys*, however, are ARKit's 52 and are identity-independent — the
+// same basis for every face. Given a GLB that carries them (LAM's own avatar
+// export, e.g. skin.glb), we can rig any identity by bending it through them.
+const nb = RIG_CHANNELS.length;
+const deltaTable = new Float32Array(nb * nv * 3);
+
+if (basisPath) {
+  const { parseGLB, extractMesh, preparePrimitive } = await import('./glb.mjs');
+  const { readFileSync } = await import('node:fs');
+  const raw = readFileSync(resolve(basisPath));
+  const { json, bin } = parseGLB(Buffer.from(raw.buffer.slice(raw.byteOffset, raw.byteOffset + raw.byteLength)));
+  const { prims } = extractMesh(json, bin);
+  const prim = preparePrimitive(json, bin, prims[0]);
+  if (!prim || !prim.targets.length) throw new Error(`${basisPath} has no morph targets`);
+  if (prim.pos.length / 3 !== nv) {
+    console.error(`basis mesh has ${prim.pos.length / 3} verts but verts.npy has ${nv}`);
+    process.exit(1);
+  }
+  const byName = new Map(prim.targets.map((t, i) => [t.name, i]));
+  let found = 0;
+  for (const [arkit, channel, sign, div] of ARKIT_MAP) {
+    const ti = byName.get(arkit);
+    if (ti === undefined) continue;
+    found++;
+    const c = RIG_CHANNELS.indexOf(channel);
+    if (c < 0) continue;
+    const src = prim.targets[ti].pos;
+    for (let v = 0; v < nv; v++) {
+      const o = (c * nv + v) * 3;
+      deltaTable[o] += (src[v * 3] * sign) / div;
+      deltaTable[o + 1] += (src[v * 3 + 1] * sign) / div;
+      deltaTable[o + 2] += (src[v * 3 + 2] * sign) / div;
+    }
+  }
+  console.log(`basis     ${found}/${ARKIT_MAP.length} ARKit keys found in ${basisPath}`);
+} else {
+  const D52 = D.data;
+  for (const [arkit, channel, sign, div] of ARKIT_MAP) {
+    const k = ARKIT_NAMES.indexOf(arkit);
+    const c = RIG_CHANNELS.indexOf(channel);
+    if (k < 0 || c < 0 || k >= D.shape[0]) continue;
+    for (let v = 0; v < nv; v++) {
+      const o = (c * nv + v) * 3;
+      const src = (k * nv + v) * 3;
+      deltaTable[o] += (D52[src] * sign) / div;
+      deltaTable[o + 1] += (D52[src + 1] * sign) / div;
+      deltaTable[o + 2] += (D52[src + 2] * sign) / div;
+    }
+  }
 }
 
 // ---- triangle acceleration structure -------------------------------------
@@ -200,7 +257,6 @@ function nearestBary(px, py, pz) {
 }
 
 // ---- bind ----------------------------------------------------------------
-const nb = RIG_CHANNELS.length;
 const positions = new Float32Array(n * 3);
 const scales = new Float32Array(n * 3);
 const quats = new Float32Array(n * 4);
@@ -208,9 +264,6 @@ const colors = new Float32Array(n * 3);
 const opacity = new Float32Array(n);
 const weights = new Float32Array(n * nb);
 const deltas = new Float32Array(n * nb * 3);
-
-const D52 = D.data;
-const nArkit = D.shape[0];
 
 let bindErrors = 0;
 for (let i = 0; i < n; i++) {
@@ -236,19 +289,16 @@ for (let i = 0; i < n; i++) {
   const [b0, b1, b2] = hit.b;
   const [ia, ib, ic] = tri(hit.tri);
 
-  for (const [arkit, channel, sign, div] of ARKIT_MAP) {
-    const k = ARKIT_NAMES.indexOf(arkit);
-    if (k < 0 || k >= nArkit) continue;
-    const c = RIG_CHANNELS.indexOf(channel);
-    if (c < 0) continue;
-    const base = k * nv * 3;
-    const dx = (b0 * D52[base + ia * 3] + b1 * D52[base + ib * 3] + b2 * D52[base + ic * 3]) * sign / div;
-    const dy = (b0 * D52[base + ia * 3 + 1] + b1 * D52[base + ib * 3 + 1] + b2 * D52[base + ic * 3 + 1]) * sign / div;
-    const dz = (b0 * D52[base + ia * 3 + 2] + b1 * D52[base + ib * 3 + 2] + b2 * D52[base + ic * 3 + 2]) * sign / div;
+  for (let c = 0; c < nb; c++) {
+    const base = c * nv * 3;
+    const dx = b0 * deltaTable[base + ia * 3] + b1 * deltaTable[base + ib * 3] + b2 * deltaTable[base + ic * 3];
+    const dy = b0 * deltaTable[base + ia * 3 + 1] + b1 * deltaTable[base + ib * 3 + 1] + b2 * deltaTable[base + ic * 3 + 1];
+    const dz = b0 * deltaTable[base + ia * 3 + 2] + b1 * deltaTable[base + ib * 3 + 2] + b2 * deltaTable[base + ic * 3 + 2];
+    if (dx === 0 && dy === 0 && dz === 0) continue;
     const oo = (i * nb + c) * 3;
-    deltas[oo] += dx;
-    deltas[oo + 1] += dy;
-    deltas[oo + 2] += dz;
+    deltas[oo] = dx;
+    deltas[oo + 1] = dy;
+    deltas[oo + 2] = dz;
   }
 }
 

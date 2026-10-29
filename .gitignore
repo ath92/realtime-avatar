@@ -10,3 +10,7 @@ preview.png
 __pycache__/
 *.pyc
 .uv/
+
+# personal avatar captures — never commit these
+assets/me*.avtr
+me-export/
