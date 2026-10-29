@@ -16,3 +16,10 @@ assets/me*.avtr
 me-export/
 me.ply
 reference-status.ply
+
+# never commit a face
+me.jpg
+me*.jpeg
+me*.png
+me*.ply
+me*-export/
