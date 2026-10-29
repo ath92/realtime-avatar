@@ -14,3 +14,5 @@ __pycache__/
 # personal avatar captures — never commit these
 assets/me*.avtr
 me-export/
+me.ply
+reference-status.ply

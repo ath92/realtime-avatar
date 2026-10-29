@@ -35,6 +35,12 @@ const output = resolve(opt('out', 'assets/head.avtr'));
 const fitHeight = Number(opt('fit', 0.30));
 const doCenter = !has('no-center');
 const minWeight = Number(opt('min-weight', 1e-6));
+// LAM (and the 3DGS PLY convention) store rotation as (w, x, y, z); the renderer
+// wants (x, y, z, w). Getting this wrong turns every splat on its side.
+const rotOrder = (opt('rot-order', 'wxyz') || 'wxyz').toLowerCase();
+// LAM's renderer scales splats at draw time via `scaling_modifier`; the stored
+// values are not what you see. This exposes that factor.
+const scaleMul = Number(opt('scale-mul', 1));
 
 const basisPath = opt('basis', null);
 const need = ['gaussians.npy', 'verts.npy', 'faces.npy'];
@@ -275,10 +281,17 @@ for (let i = 0; i < n; i++) {
   scales[i * 3] = G.data[o + 3];
   scales[i * 3 + 1] = G.data[o + 4];
   scales[i * 3 + 2] = G.data[o + 5];
-  quats[i * 4] = G.data[o + 6];
-  quats[i * 4 + 1] = G.data[o + 7];
-  quats[i * 4 + 2] = G.data[o + 8];
-  quats[i * 4 + 3] = G.data[o + 9];
+  if (rotOrder === 'wxyz') {
+    quats[i * 4] = G.data[o + 7];
+    quats[i * 4 + 1] = G.data[o + 8];
+    quats[i * 4 + 2] = G.data[o + 9];
+    quats[i * 4 + 3] = G.data[o + 6];
+  } else {
+    quats[i * 4] = G.data[o + 6];
+    quats[i * 4 + 1] = G.data[o + 7];
+    quats[i * 4 + 2] = G.data[o + 8];
+    quats[i * 4 + 3] = G.data[o + 9];
+  }
   colors[i * 3] = G.data[o + 10];
   colors[i * 3 + 1] = G.data[o + 11];
   colors[i * 3 + 2] = G.data[o + 12];
@@ -319,9 +332,9 @@ for (let i = 0; i < n; i++) {
   positions[i * 3] = (positions[i * 3] - (doCenter ? cx : 0)) * scale;
   positions[i * 3 + 1] = (positions[i * 3 + 1] - (doCenter ? cy : 0)) * scale;
   positions[i * 3 + 2] = (positions[i * 3 + 2] - (doCenter ? cz : 0)) * scale;
-  scales[i * 3] *= scale;
-  scales[i * 3 + 1] *= scale;
-  scales[i * 3 + 2] *= scale;
+  scales[i * 3] *= scale * scaleMul;
+  scales[i * 3 + 1] *= scale * scaleMul;
+  scales[i * 3 + 2] *= scale * scaleMul;
 }
 for (let i = 0; i < deltas.length; i++) deltas[i] *= scale;
 
