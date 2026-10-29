@@ -97,6 +97,17 @@ def prepare_photo(image_path, out_dir, mask_path=None, no_mask=False):
         side = int(min(sh, sw) * 0.86)
         rect = ((sw - side) // 2, max(0, int(sh * 0.04)), side, min(side, sh - 4))
 
+    # GrabCut initialised from a rect needs definite-background pixels *outside*
+    # it; if the face box expands to the frame edge there are none, and OpenCV
+    # fails with `!bgdSamples.empty() && !fgdSamples.empty()`. Shrink to 80% and
+    # keep a 2 px border.
+    x, y, rw, rh = rect
+    rw = min(rw, int(sw * 0.80))
+    rh = min(rh, int(sh * 0.80))
+    x = max(1, min(x + (rect[2] - rw) // 2, sw - rw - 2))
+    y = max(1, min(y + (rect[3] - rh) // 2, sh - rh - 2))
+    rect = (x, y, rw, rh)
+
     alpha = None
     try:
         gc = np.zeros((sh, sw), np.uint8)
@@ -157,6 +168,9 @@ def main():
         # Gaussians do not depend on either, so keep the cheapest one on.
         'export_video=True', 'export_mesh=False',
         'motion_img_dir=null',
+        # [default] keys in parse_configs that inference.sh passes explicitly and
+        # that are absent from the yaml
+        'render_fps=30', 'render_views=1',
         f'motion_seqs_dir={os.path.abspath(args.motion)}',
         'save_ply=False', 'save_img=False',
         'vis_motion=False', 'motion_img_need_mask=False',
@@ -251,7 +265,15 @@ def main():
 
     # ARKit basis lives right after the identity basis in shapedirs
     n_shape = int(fm.n_shape_params)
-    basis = fm.shapedirs[:, :, n_shape:n_shape + 52]
+    # vertices are upsampled (20 018 for subdivide=1), so the basis must be too
+    shapedirs = getattr(fm, 'shapedirs_up', None)
+    if shapedirs is None:
+        shapedirs = fm.shapedirs
+    if shapedirs.shape[0] != verts.shape[0]:
+        raise RuntimeError(
+            f'basis has {shapedirs.shape[0]} verts but the mesh has {verts.shape[0]}; '
+            'FLAME tessellation mismatch')
+    basis = shapedirs[:, :, n_shape:n_shape + 52]
     deltas = basis.permute(2, 0, 1).detach().float().cpu().numpy()  # (52, V, 3)
     np.save(os.path.join(args.out, 'deltas.npy'), deltas.astype(np.float32))
 
