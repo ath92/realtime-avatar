@@ -84,8 +84,8 @@ Or run the whole thing on a rented GPU without a shell — [Modal](https://modal
 builds the image, grabs the GPU and hands the export back:
 
 ```bash
-pip install modal && modal token new
-modal run tools/lam/modal_app.py --photo me.jpg
+uvx modal token new                  # no install: uvx runs it from a temp env
+uvx modal run tools/lam/modal_app.py --photo me.jpg
 ```
 
 Docker is there too (`tools/lam/Dockerfile`). Step-by-step for both:

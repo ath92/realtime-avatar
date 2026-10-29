@@ -16,13 +16,18 @@ product — the exported avatar is a derivative of all three.
 back to your laptop. First run builds the image (~40 min, cached after). Assets
 download once into a persistent volume.
 
-```bash
-pip install modal
-modal token new                      # one browser click, once ever
+Nothing needs installing — `uvx` runs the Modal client from a throwaway
+environment and caches it:
 
-modal run tools/lam/modal_app.py --photo me.jpg
+```bash
+uvx modal token new                  # one browser click, once ever
+uvx modal run tools/lam/modal_app.py --photo me.jpg
 node tools/import-lam.mjs --in ./me-export --out assets/me.avtr
 ```
+
+(No `uv`? `brew install uv`, or use a venv: `python3 -m venv .venv &&
+. .venv/bin/activate && pip install modal`. Pin the client with `uvx modal@1.6.3`
+if you want reproducibility.)
 
 Add `--gpu a100` if the 24 GB card runs out of memory. Cost is GPU-minutes: a few
 cents per avatar once the image is cached, plus the one-time build.
