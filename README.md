@@ -61,8 +61,26 @@ node tools/check-avatar.mjs assets/me.avtr
 Then open `/client/?asset=/assets/me.avtr`. No code changes: channels are matched
 by name, morph targets become per-Gaussian deltas, and the client keeps working.
 
-Full walkthrough, including the FLAME-reconstruction route (LAM, Avat3r,
-GaussianAvatars) and the channel mapping table: **[docs/ASSET.md](docs/ASSET.md)**.
+Full walkthrough, including the channel mapping table: **[docs/ASSET.md](docs/ASSET.md)**.
+
+### Or from one photo, with LAM
+
+LAM reconstructs an animatable Gaussian head from a single image, but it needs an
+NVIDIA GPU and returns FLAME-space Gaussians with no rig. `tools/import-lam.mjs`
+reconstructs the rig: it binds every Gaussian to its nearest FLAME triangle and
+pushes the 52 FLAME blendshape directions through those barycentric weights.
+
+```bash
+# on a rented GPU box
+python tools/lam/export_avatar.py --lam-root /workspace/LAM \
+  --model model_zoo/.../step_045500 --image me.jpg \
+  --motion assets/sample_motion/export/Look_In_My_Eyes --out /workspace/me-export
+
+# back on your machine
+node tools/import-lam.mjs --in ~/Downloads/me-export --out assets/me.avtr
+```
+
+Step-by-step: **[docs/RUNBOOK-LAM.md](docs/RUNBOOK-LAM.md)**.
 
 ## Measured on this machine
 
@@ -87,6 +105,9 @@ shared/format.mjs  the .avtr container
 tools/
   rig.mjs            procedural character
   import-mesh.mjs    GLB with ARKit shape keys -> .avtr
+  import-lam.mjs     LAM FLAME-space Gaussians -> .avtr (re-binds the rig)
+  arkit-map.mjs      ARKit 52 -> rig 16 channel mapping, shared by both
+  lam/export_avatar.py   runs on the GPU box, dumps what the importer needs
   glb.mjs            dependency-free glTF reader + PNG decoder
   check-avatar.mjs   rig validator (CI-friendly)
   preview.mjs        software renderer, no GPU

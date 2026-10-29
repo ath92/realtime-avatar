@@ -11,7 +11,9 @@
     "import": "node tools/import-mesh.mjs",
     "check": "node tools/check-avatar.mjs assets/head.avtr",
     "fixture": "node tools/make-test-glb.mjs --out /tmp/test-head.glb && node tools/import-mesh.mjs --in /tmp/test-head.glb --out /tmp/test-head.avtr",
-    "dev": "node tools/make-avatar.mjs && node server/server.mjs"
+    "dev": "node tools/make-avatar.mjs && node server/server.mjs",
+    "import:lam": "node tools/import-lam.mjs",
+    "fixture:lam": "node tools/make-test-lam.mjs --out /tmp/lam-test && node tools/import-lam.mjs --in /tmp/lam-test --out /tmp/lam-test.avtr"
   },
   "engines": {
     "node": ">=20"
