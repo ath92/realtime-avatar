@@ -32,10 +32,13 @@ LAM_COMMIT = "339573649dd93df4cba8093a964e85a80d1b61f3"  # pinned: LAM's API mov
 
 app = modal.App("lam-avatar")
 
+# LAM pins a Python 3.10-era stack (numpy 1.23, tensorflow 2.12, chumpy), and
+# Modal's current image builder no longer *installs* 3.10 (it supports 3.11+).
+# So we take a base image that already ships 3.10 - the official PyTorch one,
+# which also happens to be the exact torch/CUDA combo LAM wants. Do not add
+# `add_python=` here.
 image = (
-    modal.Image.from_registry(
-        "nvidia/cuda:12.1.1-cudnn8-devel-ubuntu22.04", add_python="3.10"
-    )
+    modal.Image.from_registry("pytorch/pytorch:2.3.0-cuda12.1-cudnn8-devel")
     .apt_install(
         "git", "wget", "curl", "build-essential", "cmake", "ninja-build",
         "pkg-config", "ffmpeg", "libgl1", "libglib2.0-0", "libsm6", "libxext6",
@@ -45,10 +48,6 @@ image = (
     .run_commands(
         "git clone https://github.com/aigc3d/LAM /opt/LAM",
         f"cd /opt/LAM && git checkout {LAM_COMMIT}",
-    )
-    .pip_install(
-        "torch==2.3.0", "torchvision==0.18.0", "torchaudio==2.3.0",
-        index_url="https://download.pytorch.org/whl/cu121",
     )
     .pip_install("xformers==0.0.26.post1", index_url="https://download.pytorch.org/whl/cu121")
     # pytorch3d + diff-gaussian-rasterization + nvdiffrast + simple-knn: the slow layer
