@@ -248,6 +248,17 @@ def main():
         print('[export] could not capture cano_gs_lst — the LAM API moved. Send me this log.')
         return 1
 
+    # What LAM itself thinks the avatar looks like, before we touch anything.
+    try:
+        from PIL import Image as _Image
+        rgb = res.get('comp_rgb')
+        if rgb is not None:
+            frame = (rgb[0].detach().float().cpu().numpy().clip(0, 1) * 255).astype('uint8')
+            _Image.fromarray(frame).save(os.path.join(args.out, 'lam-render.png'))
+            print('[preview] wrote lam-render.png (LAM\'s own render)', flush=True)
+    except Exception as exc:  # noqa: BLE001
+        print(f'[preview] could not save LAM render: {exc}', flush=True)
+
     gs = res['cano_gs_lst'][0]
     fm = inferrer.model.renderer.flame_model
     fp = captured['flame_params']
@@ -259,7 +270,10 @@ def main():
     def np_(t):
         return t.detach().float().cpu().numpy()
 
-    xyz = np_(gs.offset) if getattr(gs, 'offset', None) is not None else np_(gs.xyz)
+    # gs.xyz is the canonical position; gs.offset is the learned *displacement*
+    # from it. Using offset as a position throws every splat ~3 cm off the face,
+    # which is exactly what a scatter of blobs looks like.
+    xyz = np_(gs.xyz)
     scale = np_(gs.scaling)
     rot = np_(gs.rotation)
     opacity = np_(gs.opacity).reshape(-1)
@@ -284,50 +298,27 @@ def main():
 
     np.save(os.path.join(args.out, 'gaussians.npy'), gaussians)
 
-    # --- FLAME mesh + per-channel displacements ----------------------------
-    def replay(expr):
-        a, kw = record['call']
-        kw = dict(kw)
-        if 'expr' in kw:
-            kw['expr'] = expr
-        else:
-            a = list(a)
-            a[2] = expr
-            a = tuple(a)
-        out = fm.animation_forward(*a, **kw)
-        return out['animated'] if isinstance(out, dict) else out[0]
+    # Diagnostics: the two candidate position tensors, so we can tell which one
+    # is the actual canonical position without another GPU run.
+    try:
+        if getattr(gs, 'xyz', None) is not None:
+            np.save(os.path.join(args.out, 'gs-xyz.npy'), np_(gs.xyz).astype(np.float32))
+            print('[dump] gs-xyz.npy written', flush=True)
+    except Exception as exc:  # noqa: BLE001
+        print(f'[dump] no xyz: {exc}', flush=True)
 
-    deltas = None
-    if 'call' in record:
-        with torch.no_grad():
-            base = replay(torch.zeros(1, 52, device=betas.device, dtype=betas.dtype))
-            frames = []
-            for k in range(52):
-                e = torch.zeros(1, 52, device=betas.device, dtype=betas.dtype)
-                e[0, k] = 1.0
-                frames.append((replay(e) - base)[0].detach().float().cpu().numpy())
-        deltas = np.stack(frames, 0)  # (52, V, 3)
-        verts = base[0].detach().float().cpu().numpy()
-        print(f'[deltas] replayed {len(frames)} channels, max {np.abs(deltas).max() * 1000:.1f} mm', flush=True)
-    else:
-        # fallback: read the basis directly (offsets taken from the model config)
-        with torch.no_grad():
-            verts = np_(fm.get_cano_verts(shape_params=betas)[0])
-        n_shape = int(fm.n_shape_params)
-        shapedirs = getattr(fm, 'shapedirs_up', None)
-        if shapedirs is None:
-            shapedirs = fm.shapedirs
-        if shapedirs.shape[0] != verts.shape[0]:
-            raise RuntimeError(
-                f'basis has {shapedirs.shape[0]} verts but the mesh has {verts.shape[0]}')
-        basis = shapedirs[:, :, n_shape:n_shape + 52]
-        deltas = basis.permute(2, 0, 1).detach().float().cpu().numpy()
-        print('[deltas] WARNING: animation_forward never fired; fell back to shapedirs slice', flush=True)
-
+    # --- FLAME mesh --------------------------------------------------------
+    # The rig now comes from --basis (LAM's ARKit shape keys). This model is driven
+    # by FLAME's 100-d expression basis, so there is nothing ARKit-shaped to dump
+    # here; deltas.npy is written as zeros to keep the directory well-formed.
+    with torch.no_grad():
+        verts = np_(fm.get_cano_verts(shape_params=betas)[0])
     faces = fm.faces.detach().cpu().numpy().astype(np.uint32)
     np.save(os.path.join(args.out, 'verts.npy'), verts.astype(np.float32))
     np.save(os.path.join(args.out, 'faces.npy'), faces)
-    np.save(os.path.join(args.out, 'deltas.npy'), deltas.astype(np.float32))
+    np.save(os.path.join(args.out, 'deltas.npy'),
+            np.zeros((52, verts.shape[0], 3), np.float32))
+    print(f'[mesh] {verts.shape[0]:,} verts (rig comes from --basis at import time)', flush=True)
 
     arkit = [
         'browDownLeft', 'browDownRight', 'browInnerUp', 'browOuterUpLeft', 'browOuterUpRight',
@@ -359,7 +350,6 @@ def main():
     print()
     print(f'gaussians {gaussians.shape[0]:,}')
     print(f'mesh      {verts.shape[0]:,} verts, {faces.shape[0]:,} tris')
-    print(f'deltas    {deltas.shape}  max {np.abs(deltas).max() * 1000:.1f} mm')
     print(f'written   {args.out}')
     return 0
 

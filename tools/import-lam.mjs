@@ -35,6 +35,7 @@ const output = resolve(opt('out', 'assets/head.avtr'));
 const fitHeight = Number(opt('fit', 0.30));
 const doCenter = !has('no-center');
 const minWeight = Number(opt('min-weight', 1e-6));
+// Positions are gs.xyz (the anchor). gs.offset, if present, is a displacement.
 // LAM (and the 3DGS PLY convention) store rotation as (w, x, y, z); the renderer
 // wants (x, y, z, w). Getting this wrong turns every splat on its side.
 const rotOrder = (opt('rot-order', 'wxyz') || 'wxyz').toLowerCase();
