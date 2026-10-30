@@ -11,6 +11,7 @@
 import { setEnvSource, envNum } from '../server/env.mjs';
 import { llmInfo } from '../server/pipeline/llm.mjs';
 import { speak, ttsInfo } from '../server/pipeline/tts-core.mjs';
+import { transcribe, sttInfo, sttMaxAudioBytes } from '../server/pipeline/stt.mjs';
 import { createTurnRunner } from '../server/pipeline/turn.mjs';
 
 const MAX_BODY = 64 * 1024;
@@ -90,7 +91,7 @@ async function handleHealth(request) {
   if (request.method !== 'GET' && request.method !== 'HEAD') {
     return json({ error: 'method not allowed' }, 405, { Allow: 'GET, HEAD' });
   }
-  const body = JSON.stringify({ ok: true, tts: ttsInfo(), llm: llmInfo() });
+  const body = JSON.stringify({ ok: true, tts: ttsInfo(), stt: sttInfo(), llm: llmInfo() });
   return new Response(request.method === 'HEAD' ? null : body, {
     headers: {
       'Content-Type': 'application/json; charset=utf-8',
@@ -98,6 +99,57 @@ async function handleHealth(request) {
       ...SECURITY_HEADERS,
     },
   });
+}
+
+async function handleTranscribe(request) {
+  if (request.method !== 'POST') {
+    return json({ error: 'method not allowed' }, 405, { Allow: 'POST' });
+  }
+  if (!isAllowedOrigin(request.headers.get('origin'), request.url)) {
+    return json({ error: 'origin not allowed' }, 403);
+  }
+
+  // Transcription is billed per audio minute, so it has its own rate-limit
+  // bucket rather than sharing the turn budget.
+  const ip = request.headers.get('cf-connecting-ip') || 'unknown';
+  if (overLimit(`${ip}:stt`, envNum('RATE_LIMIT_PER_MINUTE', 20))) {
+    return json({ error: 'rate limit exceeded' }, 429, { 'Retry-After': '60' });
+  }
+
+  const mime = String(request.headers.get('content-type') || '').split(';')[0].trim().toLowerCase();
+  if (mime && !mime.startsWith('audio/') && mime !== 'application/octet-stream') {
+    return json({ error: `unsupported content type "${mime}" (send audio/*)` }, 415);
+  }
+
+  const max = sttMaxAudioBytes();
+  const declared = Number(request.headers.get('content-length') || 0);
+  if (declared > max) {
+    return json({ error: `audio too large (max ${Math.round(max / 1024 / 1024)} MB)` }, 413);
+  }
+
+  let audio;
+  try {
+    audio = new Uint8Array(await request.arrayBuffer());
+  } catch {
+    return json({ error: 'could not read audio body' }, 400);
+  }
+  if (audio.length > max) {
+    return json({ error: `audio too large (max ${Math.round(max / 1024 / 1024)} MB)` }, 413);
+  }
+  if (!audio.length) return json({ error: 'empty audio', code: 'STT_EMPTY' }, 400);
+
+  const language = new URL(request.url).searchParams.get('language') || '';
+  try {
+    const result = await transcribe(audio, { mime: mime || 'audio/wav', language, signal: request.signal });
+    return json(result);
+  } catch (err) {
+    const status = [400, 413, 429, 503].includes(err.status) ? err.status : 502;
+    return json({
+      error: String(err && err.message || err),
+      code: err.code || 'STT_FAILED',
+      ...(status === 503 ? { hint: sttInfo().hint } : {}),
+    }, status);
+  }
 }
 
 async function handleTurn(request, ctx) {
@@ -221,6 +273,7 @@ export default {
 
     if (url.pathname === '/api/health') return handleHealth(request);
     if (url.pathname === '/api/turn') return handleTurn(request, ctx);
+    if (url.pathname === '/api/transcribe') return handleTranscribe(request);
     if (url.pathname.startsWith('/api/')) {
       return json({ error: 'not found' }, 404);
     }

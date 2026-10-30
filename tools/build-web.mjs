@@ -29,6 +29,7 @@ const CLIENT_FILES = [
   'app.js',
   'audio.js',
   'idle.js',
+  'mic.js',
   'rig.js',
   'splat.js',
 ];

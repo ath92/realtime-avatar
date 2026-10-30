@@ -76,7 +76,10 @@ jobs:
           LLM_PROVIDER: ${{ vars.LLM_PROVIDER }}
           LLM_MODEL: ${{ vars.LLM_MODEL }}
           TTS_PROVIDER: ${{ vars.TTS_PROVIDER }}
+          STT_PROVIDER: ${{ vars.STT_PROVIDER }}
+          STT_LANGUAGE: ${{ vars.STT_LANGUAGE }}
           ELEVENLABS_MODEL_ID: ${{ vars.ELEVENLABS_MODEL_ID }}
+          ELEVENLABS_STT_MODEL: ${{ vars.ELEVENLABS_STT_MODEL }}
           ELEVENLABS_OUTPUT_FORMAT: ${{ vars.ELEVENLABS_OUTPUT_FORMAT }}
           ELEVENLABS_VOICE_NAME: ${{ vars.ELEVENLABS_VOICE_NAME }}
           TTS_CACHE_SIZE: ${{ vars.TTS_CACHE_SIZE }}
@@ -106,7 +109,10 @@ jobs:
             LLM_PROVIDER \
             LLM_MODEL \
             TTS_PROVIDER \
+            STT_PROVIDER \
+            STT_LANGUAGE \
             ELEVENLABS_MODEL_ID \
+            ELEVENLABS_STT_MODEL \
             ELEVENLABS_OUTPUT_FORMAT \
             ELEVENLABS_VOICE_NAME \
             TTS_CACHE_SIZE

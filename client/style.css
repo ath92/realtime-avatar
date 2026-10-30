@@ -139,3 +139,92 @@ body::after {
 }
 #send:hover { background: rgba(126, 224, 195, 0.18); }
 #send:active { transform: scale(0.96); }
+
+/* Voice input: the mic toggles push-to-talk, the pill says what it is doing. */
+#mic {
+  width: 34px; height: 34px;
+  flex: none;
+  display: grid;
+  place-items: center;
+  border-radius: 10px;
+  border: 1px solid var(--line);
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--fg);
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s, color 0.15s, transform 0.1s;
+}
+#mic:hover { background: rgba(126, 224, 195, 0.18); }
+#mic:active { transform: scale(0.95); }
+#mic:disabled { opacity: 0.4; cursor: not-allowed; }
+#mic.listening {
+  background: rgba(126, 224, 195, 0.2);
+  border-color: rgba(126, 224, 195, 0.55);
+  color: var(--accent);
+  animation: mic-glow 1.6s ease-in-out infinite;
+}
+#mic.transcribing { color: var(--dim); }
+@keyframes mic-glow {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(126, 224, 195, 0.35); }
+  50% { box-shadow: 0 0 0 6px rgba(126, 224, 195, 0); }
+}
+
+.voice {
+  justify-self: center;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 6px 12px;
+  border: 1px solid rgba(126, 224, 195, 0.32);
+  border-radius: 999px;
+  background: var(--panel);
+  backdrop-filter: blur(16px);
+  color: var(--fg);
+  font-size: 12.5px;
+  animation: rise 0.18s ease-out;
+}
+.voice[hidden] { display: none; }
+.voice .dot {
+  width: 7px; height: 7px;
+  flex: none;
+  border-radius: 50%;
+  background: var(--accent);
+  animation: pulse 1.4s ease-in-out infinite;
+}
+@keyframes pulse {
+  0%, 100% { opacity: 1; box-shadow: 0 0 0 0 rgba(126, 224, 195, 0.45); }
+  50% { opacity: 0.55; box-shadow: 0 0 0 5px rgba(126, 224, 195, 0); }
+}
+.voice .meter {
+  width: 56px; height: 4px;
+  flex: none;
+  border-radius: 2px;
+  background: rgba(255, 255, 255, 0.12);
+  overflow: hidden;
+}
+.voice .meter i {
+  display: block;
+  height: 100%;
+  width: 100%;
+  background: var(--accent);
+  transform: scaleX(var(--level, 0));
+  transform-origin: left center;
+  transition: transform 0.07s linear;
+}
+.voice kbd {
+  font: inherit;
+  font-size: 11px;
+  color: var(--dim);
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  padding: 1px 5px;
+  line-height: 1.4;
+}
+.voice[data-mode="transcribing"] .dot { animation: blink 0.9s steps(2, start) infinite; }
+@keyframes blink { to { opacity: 0.25; } }
+.voice[data-mode="transcribing"] .meter,
+.voice[data-mode="transcribing"] kbd { display: none; }
+
+@media (prefers-reduced-motion: reduce) {
+  #mic.listening, .voice .dot, .line { animation: none; }
+  .voice .meter i { transition: none; }
+}

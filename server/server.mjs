@@ -15,6 +15,7 @@ import { gzipSync } from 'node:zlib';
 import { fileURLToPath } from 'node:url';
 import { loadEnv } from './load-env.mjs';
 import { speak, ttsInfo } from './pipeline/tts.mjs';
+import { transcribe, sttInfo, sttMaxAudioBytes } from './pipeline/stt.mjs';
 import { llmInfo } from './pipeline/llm.mjs';
 import { createTurnRunner } from './pipeline/turn.mjs';
 
@@ -147,6 +148,75 @@ async function readJsonBody(req, limit = MAX_BODY) {
   }
 }
 
+function sendJson(res, status, body, extra = {}) {
+  const json = JSON.stringify(body);
+  res.writeHead(status, {
+    'Content-Type': 'application/json; charset=utf-8',
+    'Cache-Control': 'no-store',
+    'Content-Length': Buffer.byteLength(json),
+    ...extra,
+  }).end(json);
+}
+
+// Voice input is one audio blob per utterance, so it gets its own (much larger)
+// limit instead of reusing the 64 kB JSON one.
+async function readAudioBody(req, limit) {
+  const chunks = [];
+  let size = 0;
+  for await (const chunk of req) {
+    size += chunk.length;
+    if (size > limit) {
+      const err = new Error(`audio too large (max ${Math.round(limit / 1024 / 1024)} MB)`);
+      err.status = 413;
+      throw err;
+    }
+    chunks.push(chunk);
+  }
+  return Buffer.concat(chunks);
+}
+
+// ---- speech to text -------------------------------------------------------
+// The browser records one utterance and POSTs it as raw bytes with its own
+// Content-Type. The reply is JSON, not SSE: transcription happens before the
+// turn starts, and the client shows the text it is about to send.
+async function handleTranscribe(req, res) {
+  const url = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
+  const mime = String(req.headers['content-type'] || '').split(';')[0].trim().toLowerCase();
+
+  if (mime && !mime.startsWith('audio/') && mime !== 'application/octet-stream') {
+    sendJson(res, 415, { error: `unsupported content type "${mime}" (send audio/*)` });
+    return;
+  }
+
+  // Stop paying for a transcription nobody will read if the tab goes away.
+  const controller = new AbortController();
+  res.on('close', () => {
+    if (!res.writableEnded) controller.abort();
+  });
+
+  try {
+    const audio = await readAudioBody(req, sttMaxAudioBytes());
+    if (!audio.length) {
+      sendJson(res, 400, { error: 'empty audio', code: 'STT_EMPTY' });
+      return;
+    }
+    const result = await transcribe(audio, {
+      mime: mime || 'audio/wav',
+      language: url.searchParams.get('language') || '',
+      signal: controller.signal,
+    });
+    sendJson(res, 200, result);
+  } catch (err) {
+    if (res.writableEnded) return;
+    const status = [400, 413, 429, 503].includes(err.status) ? err.status : 502;
+    sendJson(res, status, {
+      error: String(err && err.message || err),
+      code: err.code || 'STT_FAILED',
+      hint: status === 503 ? sttInfo().hint : undefined,
+    });
+  }
+}
+
 // ---- turn handler ---------------------------------------------------------
 async function handleTurn(req, res) {
   let payload;
@@ -211,11 +281,13 @@ const server = createServer(async (req, res) => {
   const url = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
 
   if (req.method === 'POST' && url.pathname === '/api/turn') return handleTurn(req, res);
+  if (req.method === 'POST' && url.pathname === '/api/transcribe') return handleTranscribe(req, res);
 
   if (url.pathname === '/api/health') {
     const body = JSON.stringify({
       ok: true,
       tts: ttsInfo(),
+      stt: sttInfo(),
       llm: llmInfo(),
       assets: ASSETS,
     });
@@ -245,10 +317,12 @@ const server = createServer(async (req, res) => {
 function listen(port, attempts = 0) {
   server.listen(port, HOST, () => {
     const tts = ttsInfo();
+    const stt = sttInfo();
     const llm = llmInfo();
     console.log(`avatar  http://${HOST}:${port}/client/`);
     console.log(`  llm  ${llm.provider} · ${llm.model}${llm.available ? '' : ' (no key)'}`);
     console.log(`  tts  ${tts.provider}${tts.model ? ` · ${tts.model}` : ''}${tts.available ? '' : ' (unavailable)'}`);
+    console.log(`  stt  ${stt.provider}${stt.model && stt.provider !== 'none' ? ` · ${stt.model}` : ''}${stt.available ? '' : ' (voice input off)'}`);
     if (envLoad.loaded) console.log(`  env  ${envLoad.path} (${envLoad.count} vars loaded)`);
   });
   server.once('error', (err) => {

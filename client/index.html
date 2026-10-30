@@ -12,10 +12,24 @@
 
 <main class="dock">
   <div id="transcript" class="transcript"></div>
+  <div id="voice" class="voice" data-mode="listening" hidden>
+    <span class="dot" aria-hidden="true"></span>
+    <span id="voice-label" class="voice-label" role="status">Listening…</span>
+    <span class="meter" aria-hidden="true"><i id="voice-meter"></i></span>
+    <kbd>esc</kbd>
+  </div>
   <form class="composer" onsubmit="return false">
     <button id="reset" type="button" aria-label="New conversation" title="New conversation">↺</button>
     <input id="input" type="text" autocomplete="off" spellcheck="false"
            placeholder="Ask the avatar something…" />
+    <button id="mic" type="button" aria-pressed="false"
+            aria-label="Talk to the avatar" title="Talk to the avatar (or just type)">
+      <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">
+        <rect x="9" y="2.5" width="6" height="11" rx="3" fill="currentColor" />
+        <path d="M5.5 11a6.5 6.5 0 0 0 13 0M12 17.5V21" fill="none" stroke="currentColor"
+              stroke-width="1.7" stroke-linecap="round" />
+      </svg>
+    </button>
     <button id="send" type="button" aria-label="Send">↵</button>
   </form>
 </main>

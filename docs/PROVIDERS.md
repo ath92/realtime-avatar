@@ -20,16 +20,20 @@ works. Keep the file private (`chmod 600 .env`); it is gitignored.
 | | Automatic order | Override |
 |---|---|---|
 | LLM | `OPENAI_API_KEY` → `ANTHROPIC_API_KEY` → `DEEPSEEK_API_KEY` → stub | `LLM_PROVIDER=openai\|deepseek\|anthropic\|stub` |
+| STT | `ELEVENLABS_API_KEY` → `OPENAI_API_KEY` → off | `STT_PROVIDER=elevenlabs\|openai\|none` |
 | TTS | `ELEVENLABS_API_KEY` → macOS `say` → babble | `TTS_PROVIDER=elevenlabs\|say\|none` |
 
-An explicit `LLM_PROVIDER` or `TTS_PROVIDER` wins over detection. With several
-LLM keys present, the order above decides; set `LLM_PROVIDER` explicitly if you
-want a specific one. `GET /api/health` reports what was resolved:
+An explicit `LLM_PROVIDER`, `STT_PROVIDER` or `TTS_PROVIDER` wins over detection.
+With several LLM keys present, the order above decides; set `LLM_PROVIDER`
+explicitly if you want a specific one. `GET /api/health` reports what was
+resolved:
 
 ```json
 {
   "tts": { "provider": "elevenlabs", "voiceId": "21m00Tcm4TlvDq8ikWAM",
            "model": "eleven_turbo_v2_5", "format": "pcm_22050", "available": true },
+  "stt": { "provider": "elevenlabs", "model": "scribe_v2", "language": "auto",
+           "available": true, "maxAudioBytes": 8388608 },
   "llm": { "provider": "deepseek", "model": "deepseek-chat",
            "baseUrl": "https://api.deepseek.com/v1", "available": true }
 }
@@ -107,6 +111,73 @@ because Anthropic requires the field.
   for 429/5xx responses *before* any tokens are read, so a retry cannot duplicate
   half a reply.
 - Closing the browser tab aborts the in-flight LLM request on the server.
+
+## Speech to text (voice input)
+
+The microphone button records one utterance and uploads 16 kHz mono 16-bit WAV;
+the transcript then takes the same path as typed text. The provider is chosen the
+same way as the other stages (see the table above).
+
+```js
+transcribe(bytes, { mime, language, signal }) -> { text, provider, model, ms }
+```
+
+The audio is not written to disk and is not kept after the request. The client
+stops the recording itself — ~1.1 s after you pause, or after 30 s — and Esc
+cancels a recording or a transcription in flight.
+
+### ElevenLabs (Scribe)
+
+`ELEVENLABS_API_KEY` is enough — it is the same key as the voice — **but the key
+must have the `speech_to_text` permission**. ElevenLabs API keys are scoped per
+permission, and a key created for TTS only (which is all the avatar's own voice
+needs) returns:
+
+```
+elevenlabs 401: The API key you used is missing the permission speech_to_text to
+execute this operation.
+```
+
+Enable **Speech to Text** on the key under **profile → API keys** (or create a
+second key with it), then restart the server. The pipeline appends that
+instruction to the error, so it shows up in the transcript too.
+
+| Variable | Default | Notes |
+|---|---|---|
+| `ELEVENLABS_STT_MODEL` | `scribe_v2` | `scribe_v2_medical` for clinical audio |
+| `STT_LANGUAGE` | unset (auto-detect) | ISO 639-1 or 639-3, e.g. `en` / `eng` |
+| `ELEVENLABS_STT_PCM` | `true` | 16 kHz WAV is sent as headerless `pcm_s16le_16`, skipping Scribe's decode step; `false` always uploads a container |
+
+The adapter calls `POST /v1/speech-to-text` with `file`, `model_id`, and
+`tag_audio_events=false`, so `(laughter)`-style tags never reach the LLM.
+`ELEVENLABS_ENABLE_LOGGING` maps to the endpoint's `enable_logging` flag, exactly
+as it does for TTS.
+
+### OpenAI (Whisper)
+
+With only `OPENAI_API_KEY` set — or `STT_PROVIDER=openai` — the adapter calls
+`POST /audio/transcriptions` with `response_format=json`, so any compatible
+endpoint works, including a local whisper.cpp server on
+`OPENAI_STT_BASE_URL=http://127.0.0.1:...` with no key.
+
+| Variable | Default |
+|---|---|
+| `OPENAI_STT_MODEL` | `whisper-1` (`gpt-4o-mini-transcribe` is faster where available) |
+| `OPENAI_STT_BASE_URL` | `OPENAI_BASE_URL` |
+| `STT_LANGUAGE` | unset (auto-detect) |
+
+`OPENAI_STT_BASE_URL` exists because the LLM often points `OPENAI_BASE_URL` at a
+chat-only endpoint (Groq, OpenRouter, a local llama); give the microphone its own
+base when Whisper runs elsewhere.
+
+### What the microphone uploads
+
+`client/mic.js` records with `MediaRecorder` (Opus/WebM in Chrome, AAC/MP4 in
+Safari), decodes the result with WebAudio at 16 kHz, trims the silence either
+side of the speech, and uploads 16-bit PCM WAV. That gives every browser one
+format, ~32 kB/s, and no transcoder on the server. `STT_MAX_AUDIO_MB` (default 8)
+caps the upload — a spoken turn is a few hundred kB; `STT_TIMEOUT_MS` (30 s) and
+`STT_RETRIES` (1) bound and retry the provider call.
 
 ## TTS
 
@@ -198,20 +269,29 @@ key.
 ## Checking it
 
 ```bash
-npm run smoke                 # LLM reply + TTS audio, prints timings, writes a WAV
+npm run smoke                 # LLM reply + TTS audio + transcribe it back, prints timings
 npm run smoke -- --json       # machine-readable
 npm run smoke -- --no-tts     # LLM only
+npm run smoke -- --no-stt     # skip the speech-to-text leg
 npm run voices                # ElevenLabs voices
 npm test                      # mocked provider contracts; no keys or network
 ```
 
 `npm run smoke` exits non-zero if a configured provider is unusable, so it works
-as a preflight in a deploy script.
+as a preflight in a deploy script. The speech-to-text leg reuses the TTS output
+(it speaks a known sentence and transcribes it back), which makes it a real
+end-to-end check of the voice loop — including the key permission above.
 
 ## Troubleshooting
 
 | Symptom | Cause |
 |---|---|
+| `elevenlabs 401 ... missing the permission speech_to_text` | the key is scoped to TTS only; enable **Speech to Text** on it, then restart |
+| `Voice input is off` in the transcript | no speech-to-text key was resolved; set `ELEVENLABS_API_KEY` or `OPENAI_API_KEY` |
+| `voice: microphone permission was denied` | the browser blocked the mic for this site; allow it in site settings |
+| `voice: this browser cannot record audio` | no `getUserMedia`/`MediaRecorder`, or the page is not https/localhost |
+| `Didn't catch any speech` | the recording was trimmed to nothing: mic muted, too quiet, or ended before 200 ms |
+| `voice: unsupported content type` | `/api/transcribe` takes `audio/*` bodies only |
 | `elevenlabs 401 ... check ELEVENLABS_API_KEY` | wrong/expired key, or the key lacks TTS permission |
 | `elevenlabs 402` | plan out of credits |
 | `elevenlabs 422 ... check ELEVENLABS_VOICE_ID` | voice ID not on this account, or a setting the model rejects |
@@ -231,7 +311,9 @@ as a preflight in a deploy script.
 With cloud providers, each turn sends the user's text and recent history to the
 LLM, then sends the reply's sentence segments to ElevenLabs. ElevenLabs returns
 audio; the server derives blendshape frames and both travel to the browser.
-Rendering, the avatar asset, and the frame track stay local. API keys never
+Rendering, the avatar asset, and the frame track stay local. A voice turn adds one
+step in front: the recorded utterance goes to the speech-to-text provider and only
+the resulting text continues. API keys never
 leave the server — but the local server has no auth, and the public Worker has
 only same-origin and best-effort rate limits. Keep the local server on localhost,
 and put the deployed site behind Cloudflare Access (or an equivalent auth layer)
