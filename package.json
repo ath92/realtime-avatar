@@ -7,6 +7,7 @@
   "scripts": {
     "start": "node server/server.mjs",
     "build": "node tools/make-avatar.mjs",
+    "build:web": "node tools/build-web.mjs",
     "preview": "node tools/preview.mjs --out preview.png --yaw 0.2 --dist 0.62",
     "import": "node tools/import-mesh.mjs",
     "check": "node tools/check-avatar.mjs assets/head.avtr",

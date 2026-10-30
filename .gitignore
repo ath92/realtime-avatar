@@ -5,6 +5,12 @@ preview.png
 .env
 .env.*
 !.env.example
+.dev.vars
+.wrangler/
+dist/
+
+# generated voice A/B samples
+samples/
 
 # python bits (tooling only)
 .venv/
@@ -23,6 +29,6 @@ me.jpg
 me*.jpeg
 me*.png
 me*.ply
-me*-export/
+me*-export*/
 mouth-open.jpeg
 *.ply

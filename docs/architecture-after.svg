@@ -1,0 +1,60 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1400" height="790" viewBox="0 0 1400 790">
+<defs>
+<marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+  <path d="M 0 0 L 10 5 L 0 10 z" fill="#5b6775"/>
+</marker>
+</defs>
+<rect width="1400" height="790" fill="#f3f5f8"/>
+<text x="60" y="58" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Inter, sans-serif" font-size="29" font-weight="750" fill="#17202a" text-anchor="start" opacity="1">Avatar — after</text>
+<text x="60" y="86" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Inter, sans-serif" font-size="13.5" font-weight="400" fill="#586674" text-anchor="start" opacity="1">Cloudflare Worker + Static Assets · push to main deploys via GitHub Actions</text>
+<rect x="1210" y="36" width="60" height="26" rx="13" fill="#ffffff" stroke="#cdd5df" stroke-width="1.2"/><text x="1240.0" y="53" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Inter, sans-serif" font-size="11" font-weight="700" fill="#586674" text-anchor="middle" opacity="1">AFTER</text>
+<rect x="60" y="120" width="1280" height="115" rx="14" fill="#e8f0fd" stroke="#4d74b8" stroke-width="1.5"/>
+<text x="82" y="151" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Inter, sans-serif" font-size="19" font-weight="750" fill="#1f3b66" text-anchor="start" opacity="1">Browser</text>
+<text x="82" y="178" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Inter, sans-serif" font-size="13.2" font-weight="400" fill="#2f4b73" text-anchor="start" opacity="1">WebGL2 gaussian renderer · rig + idle motion · speaker/audio clock</text>
+<text x="82" y="201" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Inter, sans-serif" font-size="13.2" font-weight="400" fill="#2f4b73" text-anchor="start" opacity="1">SSE reader · conversation history kept in the tab</text>
+<rect x="60" y="300" width="900" height="350" rx="14" fill="#e6f7f2" stroke="#2f8f78" stroke-width="1.5"/>
+<text x="80" y="327" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Inter, sans-serif" font-size="18" font-weight="750" fill="#1c5a4b" text-anchor="start" opacity="1">Cloudflare — one deployment</text>
+<text x="80" y="347" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Inter, sans-serif" font-size="12.5" font-weight="400" fill="#3c6e62" text-anchor="start" opacity="1">Static Assets + Worker · stateless · global edge</text>
+<rect x="85" y="365" width="305" height="105" rx="10" fill="#ffffff" stroke="#2f8f78" stroke-width="1.2"/>
+<text x="100" y="390" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Inter, sans-serif" font-size="14" font-weight="700" fill="#1c5a4b" text-anchor="start" opacity="1">Static Assets (dist/)</text>
+<text x="100" y="411" font-family="Menlo, Consolas, 'Liberation Mono', monospace" font-size="12" font-weight="400" fill="#586674" text-anchor="start" opacity="1">GET /* — HTML · JS · CSS</text>
+<text x="100" y="431" font-family="Menlo, Consolas, 'Liberation Mono', monospace" font-size="12" font-weight="400" fill="#586674" text-anchor="start" opacity="1">assets/head.avtr · 11.5 MB</text>
+<text x="100" y="452" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Inter, sans-serif" font-size="12" font-weight="400" fill="#586674" text-anchor="start" opacity="1">asset router · ETag · CDN cache</text>
+<rect x="420" y="365" width="515" height="195" rx="10" fill="#ffffff" stroke="#2f8f78" stroke-width="1.2"/>
+<text x="435" y="390" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Inter, sans-serif" font-size="14" font-weight="700" fill="#1c5a4b" text-anchor="start" opacity="1">Worker (worker/index.mjs)</text>
+<text x="435" y="411" font-family="Menlo, Consolas, 'Liberation Mono', monospace" font-size="12" font-weight="400" fill="#586674" text-anchor="start" opacity="1">POST /api/turn · GET /api/health</text>
+<text x="435" y="432" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Inter, sans-serif" font-size="12" font-weight="400" fill="#586674" text-anchor="start" opacity="1">same-origin guard · per-IP rate limit</text>
+<text x="435" y="453" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Inter, sans-serif" font-size="12" font-weight="400" fill="#586674" text-anchor="start" opacity="1">shared turn pipeline (server/pipeline/turn.mjs)</text>
+<text x="435" y="474" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Inter, sans-serif" font-size="12" font-weight="400" fill="#586674" text-anchor="start" opacity="1">LLM adapter · TTS core · audio → frames</text>
+<text x="435" y="495" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Inter, sans-serif" font-size="12" font-weight="400" fill="#586674" text-anchor="start" opacity="1">inline audioBase64 + framesData</text>
+<text x="435" y="516" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Inter, sans-serif" font-size="12" font-weight="400" fill="#586674" text-anchor="start" opacity="1">one SSE response, no media store</text>
+<rect x="85" y="578" width="850" height="60" rx="10" fill="#f1eafe" stroke="#7a5bb5" stroke-width="1.2"/>
+<text x="100" y="602" font-family="Menlo, Consolas, 'Liberation Mono', monospace" font-size="11.8" font-weight="400" fill="#4b367a" text-anchor="start" opacity="1">Bindings:  ASSETS · DEEPSEEK_API_KEY · ELEVENLABS_API_KEY</text>
+<text x="100" y="624" font-family="Menlo, Consolas, 'Liberation Mono', monospace" font-size="11.8" font-weight="400" fill="#4b367a" text-anchor="start" opacity="1">RATE_LIMIT_PER_MINUTE · optional LLM/TTS settings</text>
+<path d="M 230 235 V 300" fill="none" stroke="#5b6775" stroke-width="2" marker-end="url(#arrow)"/>
+<rect x="240" y="258" width="187.88000000000002" height="21" rx="5" fill="#f3f5f8" stroke="none" stroke-width="1.5"/><text x="333.94" y="273" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Inter, sans-serif" font-size="11.5" font-weight="600" fill="#586674" text-anchor="middle" opacity="1">GET /* (HTML · JS · avatar)</text>
+<path d="M 560 235 V 300" fill="none" stroke="#5b6775" stroke-width="2" marker-end="url(#arrow)"/>
+<rect x="570" y="258" width="104.16000000000001" height="21" rx="5" fill="#f3f5f8" stroke="none" stroke-width="1.5"/><text x="622.08" y="273" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Inter, sans-serif" font-size="11.5" font-weight="600" fill="#586674" text-anchor="middle" opacity="1">POST /api/turn</text>
+<path d="M 720 300 V 235" fill="none" stroke="#5b6775" stroke-width="2" marker-end="url(#arrow)"/>
+<rect x="730" y="258" width="226.52" height="21" rx="5" fill="#f3f5f8" stroke="none" stroke-width="1.5"/><text x="843.26" y="273" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Inter, sans-serif" font-size="11.5" font-weight="600" fill="#586674" text-anchor="middle" opacity="1">SSE: tokens + inline audio/frames</text>
+<rect x="1000" y="300" width="340" height="190" rx="14" fill="#f1eafe" stroke="#7a5bb5" stroke-width="1.5"/>
+<text x="1020" y="327" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Inter, sans-serif" font-size="17" font-weight="750" fill="#4b367a" text-anchor="start" opacity="1">GitHub Actions</text>
+<text x="1020" y="351" font-family="Menlo, Consolas, 'Liberation Mono', monospace" font-size="12.5" font-weight="400" fill="#5e4a8c" text-anchor="start" opacity="1">push to main</text>
+<text x="1020" y="374" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Inter, sans-serif" font-size="12" font-weight="400" fill="#5e4a8c" text-anchor="start" opacity="1">npm test · check-avatar</text>
+<text x="1020" y="395" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Inter, sans-serif" font-size="12" font-weight="400" fill="#5e4a8c" text-anchor="start" opacity="1">build-web.mjs → dist/</text>
+<text x="1020" y="416" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Inter, sans-serif" font-size="12" font-weight="400" fill="#5e4a8c" text-anchor="start" opacity="1">wrangler deploy</text>
+<text x="1020" y="437" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Inter, sans-serif" font-size="12" font-weight="400" fill="#5e4a8c" text-anchor="start" opacity="1">wrangler secret put</text>
+<text x="1020" y="463" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Inter, sans-serif" font-size="11.5" font-weight="400" fill="#7a5bb5" text-anchor="start" opacity="1">keys from GitHub secrets</text>
+<path d="M 1000 395 H 960" fill="none" stroke="#7a5bb5" stroke-width="2" marker-end="url(#arrow)"/>
+<rect x="953.68" y="368" width="52.64" height="21" rx="5" fill="#f3f5f8" stroke="none" stroke-width="1.5"/><text x="980.0" y="383" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Inter, sans-serif" font-size="11.5" font-weight="600" fill="#4b367a" text-anchor="middle" opacity="1">deploy</text>
+<rect x="1000" y="555" width="340" height="145" rx="14" fill="#fff3df" stroke="#c68a2b" stroke-width="1.5"/>
+<text x="1020" y="582" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Inter, sans-serif" font-size="17" font-weight="750" fill="#7c5415" text-anchor="start" opacity="1">External providers</text>
+<text x="1020" y="606" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Inter, sans-serif" font-size="12" font-weight="400" fill="#7c5415" text-anchor="start" opacity="1">DeepSeek · OpenAI-compatible</text>
+<text x="1020" y="627" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Inter, sans-serif" font-size="12" font-weight="400" fill="#7c5415" text-anchor="start" opacity="1">Anthropic</text>
+<text x="1020" y="651" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Inter, sans-serif" font-size="12" font-weight="400" fill="#7c5415" text-anchor="start" opacity="1">ElevenLabs TTS</text>
+<text x="1020" y="675" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Inter, sans-serif" font-size="11.5" font-weight="400" fill="#9a6a1e" text-anchor="start" opacity="1">no macOS say in the cloud</text>
+<path d="M 935 500 H 970 V 625 H 1000" fill="none" stroke="#c68a2b" stroke-width="2" marker-end="url(#arrow)"/>
+<rect x="951.9" y="550" width="46.2" height="21" rx="5" fill="#f3f5f8" stroke="none" stroke-width="1.5"/><text x="975.0" y="565" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Inter, sans-serif" font-size="11.5" font-weight="600" fill="#7c5415" text-anchor="middle" opacity="1">HTTPS</text>
+<text x="60" y="736" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Inter, sans-serif" font-size="12.5" font-weight="400" fill="#586674" text-anchor="start" opacity="1">Stateless · static assets on the CDN · keys are Worker secrets · put Cloudflare Access / WAF in front before sharing</text>
+<text x="60" y="768" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Inter, sans-serif" font-size="11" font-weight="400" fill="#8a95a1" text-anchor="start" opacity="1">avatar · realtime gaussian head</text>
+</svg>

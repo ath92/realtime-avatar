@@ -23,7 +23,7 @@ node server/server.mjs          # or: npm start
 open http://127.0.0.1:8787/client/
 ```
 
-No dependencies, no build step, and no API key is required for the demo. On macOS the voice comes from `say`;
+No dependencies, no build step for local development, and no API key is required for the demo. On macOS the voice comes from `say`;
 elsewhere it falls back to a synthetic babble, and the LLM streams a canned reply
 so the pipeline still runs.
 
@@ -31,24 +31,49 @@ For a real conversation, copy the example env file and fill in what you have:
 
 ```bash
 cp .env.example .env
-# ELEVENLABS_API_KEY=...                       real voice
-# OPENAI_API_KEY=... or ANTHROPIC_API_KEY=...  real replies
+# ELEVENLABS_API_KEY=...                            real voice
+# DEEPSEEK_API_KEY=... (or OPENAI_API_KEY / ANTHROPIC_API_KEY)  real replies
 node server/server.mjs
 npm run smoke                                  # checks both providers, no browser
 npm run voices                                 # list ElevenLabs voice IDs
 ```
 
+The server loads `.env` on every start, so there is nothing to `source` or
+export before `npm start`. Keep the file private (`chmod 600 .env`); it is
+gitignored.
+
 Provider selection is automatic: with `ELEVENLABS_API_KEY` set the server uses
-ElevenLabs, otherwise `say` on macOS. With `OPENAI_API_KEY` it uses any
-OpenAI-compatible endpoint; with `ANTHROPIC_API_KEY` it uses Anthropic. The full
-matrix, env vars, and troubleshooting are in **[docs/PROVIDERS.md](docs/PROVIDERS.md)**.
+ElevenLabs, otherwise `say` on macOS. `DEEPSEEK_API_KEY` alone selects DeepSeek
+with the right base URL and model; `OPENAI_API_KEY` uses any OpenAI-compatible
+endpoint, and `ANTHROPIC_API_KEY` uses Anthropic. The full matrix, env vars, and
+troubleshooting are in **[docs/PROVIDERS.md](docs/PROVIDERS.md)**.
 
 ```bash
 node tools/make-avatar.mjs      # rebuild assets/head.avtr from the procedural rig
 node tools/preview.mjs --out preview.png --yaw 0.3 --preset talk
 node tools/check-avatar.mjs assets/head.avtr
-npm test                        # provider contract tests, mocked (no keys/network)
+npm test                        # provider + Worker tests, mocked (no keys/network)
 ```
+
+## Deploy to Cloudflare
+
+One Worker serves the built client and proxies `/api/*`, so provider keys stay
+server-side. A push to `main` deploys through GitHub Actions.
+
+```bash
+gh secret set CF_API_TOKEN     # Workers Scripts: Edit
+gh secret set CF_ACCOUNT_ID
+gh secret set DEEPSEEK_API_KEY         # or OPENAI_API_KEY / ANTHROPIC_API_KEY
+gh secret set ELEVENLABS_API_KEY
+gh secret set ELEVENLABS_VOICE_ID      # optional; defaults to Rachel
+
+git push origin main
+```
+
+The workflow tests, builds `dist/`, deploys the Worker, and pushes the provider
+keys as Worker secrets. `say` is macOS-only, so the cloud voice is ElevenLabs
+(or the synthetic fallback if no key is set). Setup, custom domains, and the
+security checklist are in **[docs/DEPLOY.md](docs/DEPLOY.md)**.
 
 ## What is real, what is a stand-in
 
@@ -56,7 +81,7 @@ npm test                        # provider contract tests, mocked (no keys/netwo
 |---|---|---|
 | Gaussian rig + WebGL2 renderer | real | — |
 | Sorting, deformation, idle motion | real | — |
-| LLM (`server/pipeline/llm.mjs`) | real: OpenAI-compatible or Anthropic, streamed with history | — |
+| LLM (`server/pipeline/llm.mjs`) | real: DeepSeek, OpenAI-compatible, or Anthropic, streamed with history | — |
 | TTS (`server/pipeline/tts.mjs`) | real: ElevenLabs raw PCM, cached and retried | Cartesia / CosyVoice behind the same `speak()` |
 | Audio → blendshapes (`server/pipeline/a2e.mjs`) | classical DSP, works, not SOTA | LAM-A2E, or any streaming audio→expression model |
 | Avatar asset (`tools/rig.mjs`) | procedural mannequin | LAM / Avat3r / UIKA reconstruction of a real person |
@@ -129,13 +154,16 @@ prints the first-token and TTS timings for your setup.
 
 ```
 client/        app shell, WebGL2 splatter, rig, idle motion, audio clock
-server/        static host + SSE orchestrator
-server/env.mjs     tiny .env loader and typed env readers
-server/pipeline/   llm · tts · audio→blendshapes · wav · http
+worker/        Cloudflare Worker entry (API proxy + static assets)
+server/        local static host + SSE orchestrator
+server/env.mjs     typed env readers (Node + Worker)
+server/load-env.mjs  .env loader (Node only)
+server/pipeline/   llm · tts · audio→blendshapes · wav · http · turn
 shared/format.mjs  the .avtr container
-test/          provider contract tests (mocked ElevenLabs/OpenAI/Anthropic)
+test/          provider, turn, and Worker routing/SSE tests (no keys/network)
 tools/
   rig.mjs            procedural character
+  build-web.mjs      copy the client + avatars into dist/ for Workers
   import-mesh.mjs    GLB with ARKit shape keys -> .avtr
   import-lam.mjs     LAM FLAME-space Gaussians -> .avtr (re-binds the rig)
   arkit-map.mjs      ARKit 52 -> rig 16 channel mapping, shared by both
@@ -149,7 +177,8 @@ tools/
   smoke.mjs          provider smoke test: LLM + TTS, no browser
   voices.mjs         list ElevenLabs voices
 assets/        head.avtr
-docs/          architecture, asset pipeline, provider setup
+docs/          architecture, asset pipeline, provider setup, deployment
+wrangler.toml  Worker + static assets config
 ```
 
 ## Known gaps
@@ -185,7 +214,9 @@ stay in the browser. With the stub LLM and `say`, no text leaves the machine.
 ElevenLabs logs requests by default; zero-retention mode
 (`ELEVENLABS_ENABLE_LOGGING=false`) is an enterprise feature. The server holds
 your API keys — do not expose it publicly without auth and rate limits, or
-strangers will spend your credits.
+strangers will spend your credits. The Cloudflare Worker adds a same-origin check
+and a best-effort per-isolate rate limit, but that is not authentication; put the
+deployed site behind Cloudflare Access (see **[docs/DEPLOY.md](docs/DEPLOY.md#security-and-cost)**).
 
 ## License
 

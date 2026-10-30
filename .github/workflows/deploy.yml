@@ -1,0 +1,115 @@
+name: Deploy to Cloudflare
+
+# Push to main = production deploy. The Worker needs no build dependencies; the
+# only external tool is Wrangler, installed below at a pinned version.
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-cloudflare
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      # Wrangler reads CLOUDFLARE_*; the repository secrets are named CF_*.
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Check required secrets
+        env:
+          CF_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
+          CF_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
+        run: |
+          set -euo pipefail
+          missing=0
+          for name in CF_API_TOKEN CF_ACCOUNT_ID; do
+            if [ -z "${!name:-}" ]; then
+              echo "::error::$name is not set. Add it under Settings -> Secrets and variables -> Actions."
+              missing=1
+            fi
+          done
+          exit "$missing"
+
+      - name: Test
+        run: npm test
+
+      - name: Validate avatar asset
+        run: node tools/check-avatar.mjs assets/head.avtr
+
+      - name: Build static site
+        run: npm run build:web
+
+      - name: Install Wrangler
+        run: npm install --global wrangler@4.156.0
+
+      # Deploy first so the Worker exists on the very first run; `secret put`
+      # updates the live deployment in place.
+      - name: Deploy Worker
+        run: wrangler deploy
+
+      - name: Push provider secrets
+        env:
+          # Provider keys (GitHub secrets).
+          DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          ELEVENLABS_API_KEY: ${{ secrets.ELEVENLABS_API_KEY }}
+          ELEVENLABS_VOICE_ID: ${{ secrets.ELEVENLABS_VOICE_ID }}
+          # Non-secret configuration (GitHub repository variables).
+          LLM_PROVIDER: ${{ vars.LLM_PROVIDER }}
+          LLM_MODEL: ${{ vars.LLM_MODEL }}
+          TTS_PROVIDER: ${{ vars.TTS_PROVIDER }}
+          ELEVENLABS_MODEL_ID: ${{ vars.ELEVENLABS_MODEL_ID }}
+          ELEVENLABS_OUTPUT_FORMAT: ${{ vars.ELEVENLABS_OUTPUT_FORMAT }}
+          ELEVENLABS_VOICE_NAME: ${{ vars.ELEVENLABS_VOICE_NAME }}
+          TTS_CACHE_SIZE: ${{ vars.TTS_CACHE_SIZE }}
+        run: |
+          set -euo pipefail
+
+          put_secret() {
+            local name="$1"
+            local value="${!name:-}"
+            if [ -z "$value" ]; then
+              echo "skip $name (not configured)"
+              return 0
+            fi
+            printf '%s' "$value" | wrangler secret put "$name" >/dev/null
+            echo "set $name"
+          }
+
+          # Secrets are only pushed when the corresponding GitHub secret or
+          # variable exists. Removing a GitHub value does not delete a Worker
+          # secret; use `wrangler secret delete NAME` for that.
+          for name in \
+            DEEPSEEK_API_KEY \
+            OPENAI_API_KEY \
+            ANTHROPIC_API_KEY \
+            ELEVENLABS_API_KEY \
+            ELEVENLABS_VOICE_ID \
+            LLM_PROVIDER \
+            LLM_MODEL \
+            TTS_PROVIDER \
+            ELEVENLABS_MODEL_ID \
+            ELEVENLABS_OUTPUT_FORMAT \
+            ELEVENLABS_VOICE_NAME \
+            TTS_CACHE_SIZE
+          do
+            put_secret "$name"
+          done

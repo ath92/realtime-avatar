@@ -5,7 +5,7 @@
 //   node tools/voices.mjs
 //   node tools/voices.mjs --json
 
-import { loadEnv } from '../server/env.mjs';
+import { loadEnv } from '../server/load-env.mjs';
 import { listVoices } from '../server/pipeline/tts.mjs';
 
 loadEnv();

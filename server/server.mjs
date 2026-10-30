@@ -13,14 +13,16 @@ import { readdirSync } from 'node:fs';
 import { join, extname, resolve, normalize } from 'node:path';
 import { gzipSync } from 'node:zlib';
 import { fileURLToPath } from 'node:url';
-import { loadEnv } from './env.mjs';
+import { loadEnv } from './load-env.mjs';
 import { speak, ttsInfo } from './pipeline/tts.mjs';
-import { analyze, toJSON } from './pipeline/a2e.mjs';
-import { readWav } from './pipeline/wav.mjs';
-import { streamReply, sanitizeHistory, llmInfo } from './pipeline/llm.mjs';
-import { isAbortError } from './pipeline/http.mjs';
+import { llmInfo } from './pipeline/llm.mjs';
+import { createTurnRunner } from './pipeline/turn.mjs';
 
 const envLoad = loadEnv();
+
+// Same orchestration the Worker runs; this entry point stores media in-process
+// and serves it from /media/<id>.
+const runTurn = createTurnRunner({ speak, ttsInfo });
 
 const ROOT = resolve(fileURLToPath(new URL('..', import.meta.url)));
 const PORT = Number(process.env.PORT || 8787);
@@ -123,23 +125,6 @@ function sseSend(res, event, data) {
   res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
 }
 
-// Cut the reply into speakable segments as tokens arrive, so the first audio
-// does not wait for the whole answer. Scan past abbreviations ("e.g. ") and cut
-// at the first boundary that leaves enough text to sound like a phrase; a short
-// opening sentence is fine and gets audio started sooner.
-function findCut(buf) {
-  const boundaries = /[.!?…]["')\]]?\s/g;
-  let m;
-  while ((m = boundaries.exec(buf))) {
-    if (m.index >= 8) return m.index + m[0].length;
-  }
-  if (buf.length > 150) {
-    const i = buf.lastIndexOf(' ', 150);
-    if (i > 60) return i + 1;
-  }
-  return -1;
-}
-
 async function readJsonBody(req, limit = MAX_BODY) {
   const chunks = [];
   let size = 0;
@@ -164,8 +149,6 @@ async function readJsonBody(req, limit = MAX_BODY) {
 
 // ---- turn handler ---------------------------------------------------------
 async function handleTurn(req, res) {
-  const t0 = performance.now();
-
   let payload;
   try {
     payload = await readJsonBody(req);
@@ -174,9 +157,6 @@ async function handleTurn(req, res) {
       .end(JSON.stringify({ error: err.message }));
     return;
   }
-
-  const text = String(payload.text || '').trim().slice(0, 8000) || 'hello';
-  const history = sanitizeHistory(payload.history);
 
   sseInit(res);
   let closed = false;
@@ -190,99 +170,40 @@ async function handleTurn(req, res) {
     if (!closed) { try { res.write(': ping\n\n'); } catch { /* closed */ } }
   }, 15_000);
 
-  const send = (ev, data) => {
+  // The runner hands us raw wav/frames; this entry point is the one that turns
+  // them into short-lived URLs. The Worker inlines them instead.
+  const emit = (event, data) => {
     if (closed) return;
-    try { sseSend(res, ev, data); } catch { closed = true; }
-  };
-
-  sseSend(res, 'start', { t: 0, tts: ttsInfo(), llm: llmInfo() });
-
-  let chain = Promise.resolve();
-  let seq = 0;
-  let firstAudioAt = null;
-  let previousText = '';
-
-  const emitSegment = (segText) => {
-    chain = chain.then(async () => {
-      if (closed) return;
-      try {
-        const tTts = performance.now();
-        const speech = await speak(segText, {
-          signal: controller.signal,
-          previousText,
-        });
-        if (!speech || closed) return;
-        const ttsMs = performance.now() - tTts;
-
-        const tA2e = performance.now();
-        const { samples, sampleRate, duration } = readWav(speech.wav);
-        const a2e = analyze(samples, sampleRate);
-        const a2eMs = performance.now() - tA2e;
-
-        const id = putMedia({ wav: speech.wav, frames: toJSON(a2e) });
-        const seqNo = seq++;
-        if (firstAudioAt === null) firstAudioAt = performance.now() - t0;
-        previousText = segText;
-
-        send('segment', {
-          seq: seqNo,
-          text: segText,
-          audio: `/media/${id}.wav`,
-          frames: `/media/${id}.json`,
-          duration,
-          fps: a2e.fps,
-          t: Math.round(performance.now() - t0),
-          ttsMs: Math.round(ttsMs),
-          a2eMs: Math.round(a2eMs),
-          provider: speech.provider,
-          voice: speech.voiceId || speech.voice || '',
-          cached: Boolean(speech.cached),
-          first: seqNo === 0,
-        });
-      } catch (err) {
-        if (closed || isAbortError(err)) return;
-        send('error', {
-          stage: 'tts',
-          message: String(err && err.message || err),
-        });
-      }
-    });
+    if (event === 'segment') {
+      const { wav, frames, ...rest } = data;
+      const id = putMedia({ wav, frames });
+      sseSend(res, event, { ...rest, audio: `/media/${id}.wav`, frames: `/media/${id}.json` });
+      return;
+    }
+    sseSend(res, event, data);
   };
 
   try {
-    let buf = '';
-    for await (const tok of streamReply(text, { history, signal: controller.signal })) {
-      if (closed) break;
-      buf += tok;
-      send('token', { text: tok, t: Math.round(performance.now() - t0) });
-      let cut;
-      while ((cut = findCut(buf)) > 0) {
-        const seg = buf.slice(0, cut).trim();
-        buf = buf.slice(cut);
-        if (seg) emitSegment(seg);
-      }
-    }
-    if (buf.trim()) emitSegment(buf.trim());
+    await runTurn({
+      text: payload.text,
+      history: payload.history,
+      signal: controller.signal,
+      emit,
+    });
   } catch (err) {
-    if (!closed && !isAbortError(err)) {
-      send('error', {
-        stage: 'llm',
-        message: String(err && err.message || err),
-      });
+    if (!closed) {
+      try {
+        sseSend(res, 'error', {
+          stage: 'server',
+          message: String(err && err.message || err),
+        });
+      } catch { /* client is gone */ }
     }
   } finally {
     clearInterval(ping);
   }
 
-  // Wait for any segment already queued before closing the stream.
-  await chain.catch(() => {});
-  if (!closed) {
-    send('done', {
-      t: Math.round(performance.now() - t0),
-      firstAudioAt: firstAudioAt === null ? null : Math.round(firstAudioAt),
-    });
-  }
-  res.end();
+  if (!closed) res.end();
 }
 
 // ---- server ---------------------------------------------------------------

@@ -10,36 +10,60 @@ node server/server.mjs
 npm run smoke
 ```
 
-`.env` is loaded from the repo root at startup. Existing process env vars always
-win, so `OPENAI_API_KEY=... node server/server.mjs` also works.
+`.env` is loaded from the repo root at startup — `npm start`, `node server/server.mjs`,
+and `npm run smoke` all pick it up with no `source`/`export` step. Existing
+process env vars always win, so `DEEPSEEK_API_KEY=... node server/server.mjs` also
+works. Keep the file private (`chmod 600 .env`); it is gitignored.
 
 ## How a provider is chosen
 
 | | Automatic order | Override |
 |---|---|---|
-| LLM | `OPENAI_API_KEY` → `ANTHROPIC_API_KEY` → stub | `LLM_PROVIDER=openai\|anthropic\|stub` |
+| LLM | `OPENAI_API_KEY` → `ANTHROPIC_API_KEY` → `DEEPSEEK_API_KEY` → stub | `LLM_PROVIDER=openai\|deepseek\|anthropic\|stub` |
 | TTS | `ELEVENLABS_API_KEY` → macOS `say` → babble | `TTS_PROVIDER=elevenlabs\|say\|none` |
 
-An explicit `LLM_PROVIDER` or `TTS_PROVIDER` wins over detection. With both LLM
-keys present, OpenAI-compatible is chosen — set `LLM_PROVIDER=anthropic` if you
-want Claude. `GET /api/health` reports what was resolved:
+An explicit `LLM_PROVIDER` or `TTS_PROVIDER` wins over detection. With several
+LLM keys present, the order above decides; set `LLM_PROVIDER` explicitly if you
+want a specific one. `GET /api/health` reports what was resolved:
 
 ```json
 {
   "tts": { "provider": "elevenlabs", "voiceId": "21m00Tcm4TlvDq8ikWAM",
            "model": "eleven_turbo_v2_5", "format": "pcm_22050", "available": true },
-  "llm": { "provider": "openai", "model": "gpt-4o-mini",
-           "baseUrl": "https://api.openai.com/v1", "available": true }
+  "llm": { "provider": "deepseek", "model": "deepseek-chat",
+           "baseUrl": "https://api.deepseek.com/v1", "available": true }
 }
 ```
 
 ## LLM
 
-Both adapters stream over SSE and expose the same contract to the orchestrator:
+All three adapters stream over SSE and expose the same contract to the
+orchestrator:
 
 ```js
 for await (const delta of streamReply(text, { history, signal })) { ... }
 ```
+
+### DeepSeek
+
+`DEEPSEEK_API_KEY` is enough. The server selects DeepSeek automatically, points
+at `https://api.deepseek.com/v1`, and uses `deepseek-chat`:
+
+```bash
+DEEPSEEK_API_KEY=sk-...
+```
+
+Overrides, all optional:
+
+| Variable | Default |
+|---|---|
+| `DEEPSEEK_BASE_URL` | `https://api.deepseek.com/v1` |
+| `LLM_MODEL` | `deepseek-chat` |
+| `LLM_PROVIDER` | `deepseek` (only needed to beat another key's auto-detection) |
+
+If you already have `OPENAI_API_KEY` in your shell, setting `LLM_PROVIDER=deepseek`
+makes the choice unambiguous. `deepseek-reasoner` works as `LLM_MODEL` if you
+want reasoning, at the cost of latency.
 
 ### OpenAI-compatible
 
@@ -49,11 +73,13 @@ works with anything that implements that shape:
 | Provider | `OPENAI_BASE_URL` | `LLM_MODEL` |
 |---|---|---|
 | OpenAI | `https://api.openai.com/v1` | `gpt-4o-mini` |
-| DeepSeek | `https://api.deepseek.com/v1` | `deepseek-chat` |
 | Groq | `https://api.groq.com/openai/v1` | e.g. `llama-3.3-70b-versatile` |
 | OpenRouter | `https://openrouter.ai/api/v1` | any routed model |
 | Ollama | `http://127.0.0.1:11434/v1` | e.g. `llama3.2` |
 | LM Studio | `http://127.0.0.1:1234/v1` | the loaded model |
+
+DeepSeek is also reachable this way, but the dedicated provider above avoids
+repeating the base URL and model.
 
 A key is optional only for localhost base URLs. `Authorization` is omitted when
 `OPENAI_API_KEY` is empty.
@@ -117,6 +143,26 @@ Voice shape is controllable with `ELEVENLABS_STABILITY` (default `0.45`),
 `ELEVENLABS_SPEAKER_BOOST` (`true`). `ELEVENLABS_LANGUAGE_CODE` is optional and
 only sent when set; it is not supported by `eleven_multilingual_v2`.
 
+### Accent and identity drift
+
+There is no accent parameter in the TTS API. The accent comes from the cloned
+voice and the model that renders it, so an American clone can still come out
+sounding British or Australian if the model drifts. The usual levers:
+
+- `eleven_turbo_v2_5` and `eleven_flash_v2_5` optimise for latency and can drift
+  toward the model's generic English. `eleven_multilingual_v2` is slower but
+  tends to hold the clone's accent and identity better.
+- `similarity_boost` is the anchor to the source voice: `0.75` is moderate,
+  `0.9–1.0` sticks closer (occasionally with more artifacts).
+- Low `stability` allows more variation in pronunciation; `0.6–0.7` is more
+  consistent, at the cost of some expressiveness.
+- Instant clones (`category: "cloned"`) preserve accent less reliably than
+  Professional Voice Clones. If settings and model changes do not recover it,
+  re-clone with more clean audio rather than fighting the request.
+
+`ELEVENLABS_LANGUAGE_CODE` is ISO 639-1 (`en`), not a regional tag, so it cannot
+select `en-US` versus `en-GB`; do not treat it as an accent control.
+
 The server splits the reply into sentence segments and calls TTS once per
 segment, passing the previous segment as `previous_text` so ElevenLabs can keep
 prosody continuous across the joins (`ELEVENLABS_REQUEST_STITCHING=false`
@@ -140,6 +186,15 @@ feature; on other plans the request can fail.
 non-macOS hosts, `say` is unavailable; the automatic fallback there is synthetic
 babble (`TTS_PROVIDER=none`), which still drives the mouth.
 
+### Cloudflare Workers
+
+The Worker runs the portable half of the pipeline: ElevenLabs or babble for TTS,
+and any of the LLM adapters. There is no macOS `say`; selecting `TTS_PROVIDER=say`
+returns a clear error. Configure the same env names as Worker secrets (or push
+them from GitHub Actions) — see **[DEPLOY.md](DEPLOY.md)**. Provider selection is
+unchanged: explicit `LLM_PROVIDER` / `TTS_PROVIDER`, then the first available
+key.
+
 ## Checking it
 
 ```bash
@@ -162,6 +217,9 @@ as a preflight in a deploy script.
 | `elevenlabs 422 ... check ELEVENLABS_VOICE_ID` | voice ID not on this account, or a setting the model rejects |
 | `elevenlabs 429` | rate limit or quota; the server retries with backoff first |
 | `ELEVENLABS_OUTPUT_FORMAT must be raw PCM` | an `mp3_*`/`opus_*` format is configured |
+| `deepseek 401 ... check DEEPSEEK_API_KEY` | wrong/expired key |
+| `deepseek 402` | the DeepSeek account balance is exhausted |
+| `deepseek 404 ... check DEEPSEEK_BASE_URL and LLM_MODEL` | wrong base URL, or model name not available |
 | `openai 404 ... check OPENAI_BASE_URL and LLM_MODEL` | base URL missing `/v1`, or model name not available |
 | `anthropic 404 ... check ANTHROPIC_MODEL` | model ID not enabled for the key |
 | No audio in the browser | autoplay policy: the first click on **↵** unlocks the AudioContext |
@@ -173,6 +231,8 @@ as a preflight in a deploy script.
 With cloud providers, each turn sends the user's text and recent history to the
 LLM, then sends the reply's sentence segments to ElevenLabs. ElevenLabs returns
 audio; the server derives blendshape frames and both travel to the browser.
-Rendering, the avatar asset, and the frame track stay local. API keys never leave
-the server — but the server has no auth, so keep it on localhost or put it behind
-auth and rate limits before exposing it.
+Rendering, the avatar asset, and the frame track stay local. API keys never
+leave the server — but the local server has no auth, and the public Worker has
+only same-origin and best-effort rate limits. Keep the local server on localhost,
+and put the deployed site behind Cloudflare Access (or an equivalent auth layer)
+before sharing it; see **[DEPLOY.md](DEPLOY.md#security-and-cost)**.

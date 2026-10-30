@@ -1,0 +1,31 @@
+# Cloudflare Worker + static assets.
+#
+# One deployment serves both halves of the app:
+#   /api/*   -> worker/index.mjs (LLM + TTS proxy, SSE)
+#   /*       -> dist/ (built by tools/build-web.mjs)
+#
+# Deploy: npm run build:web && npx wrangler deploy
+# CI:     .github/workflows/deploy.yml (push to main)
+
+name = "realtime-avatar"
+main = "worker/index.mjs"
+compatibility_date = "2026-10-29"
+
+[assets]
+directory = "./dist"
+binding = "ASSETS"
+# Only /api/* invokes the Worker. Everything else (HTML, JS, the 11.5 MB avatar)
+# is served straight from the asset router, with _headers applied by Cloudflare.
+run_worker_first = ["/api/*"]
+not_found_handling = "none"
+
+[observability]
+enabled = true
+
+# Optional custom domain. Uncomment and replace the hostname; the zone must be
+# in this Cloudflare account and the API token needs Workers Routes + DNS edit.
+# routes = [{ pattern = "avatar.example.com", custom_domain = true }]
+
+[vars]
+# Best-effort per-IP turns per minute, per isolate. Set to "0" to disable.
+RATE_LIMIT_PER_MINUTE = "20"
