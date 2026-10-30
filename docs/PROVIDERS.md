@@ -98,8 +98,13 @@ because Anthropic requires the field.
 
 ### Prompt, history, sampling
 
-- `LLM_SYSTEM` overrides the built-in spoken-word system prompt. The default asks
-  for one to three short sentences, no markdown or emoji, and contractions.
+- `LLM_SYSTEM` overrides the built-in spoken-word system prompt. The default
+  persona is a polite, helpful Dutch software engineer based in the Netherlands
+  who plays the drums; it asks for one to three short sentences, contractions,
+  no markdown or emoji, and a short polite decline on sensitive topics
+  (politics, religion, sex, violence, self-harm, illegal activity, and
+  medical/legal/financial advice). It is a single line of plain text, so keep an
+  override short and on one line.
 - The browser keeps the last 16 messages and sends them with each turn; the
   server sanitises them again (string content only, 2,000 chars per message,
   adjacent same-role turns merged, leading assistant turns dropped). The ↺ button

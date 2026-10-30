@@ -372,6 +372,45 @@ test('OpenAI: streams deltas and sends system + history + user', async () => {
   assert.equal('max_tokens' in body, false);
 });
 
+test('default system prompt carries the persona and its boundaries', async () => {
+  setEnv({
+    LLM_PROVIDER: 'openai',
+    OPENAI_API_KEY: 'test-key',
+    OPENAI_BASE_URL: `${base}/v1`,
+  });
+
+  await collect(streamReply('Hi'));
+  const body = JSON.parse(requests.at(-1).body);
+  const system = body.messages[0].content;
+
+  assert.equal(body.messages[0].role, 'system');
+  assert.match(system, /realtime avatar/);
+  assert.match(system, /helpful/i);
+  assert.match(system, /software engineering and web development/);
+  assert.match(system, /Dutch/);
+  assert.match(system, /Netherlands/);
+  assert.match(system, /drums/);
+  // Speech-friendly delivery and the sensitive-topic refusal stay in place.
+  assert.match(system, /one to three short sentences/);
+  assert.match(system, /sensitive topics/);
+  assert.match(system, /politely/);
+  // A configured override still wins over the built-in persona.
+  assert.equal(process.env.LLM_SYSTEM, undefined);
+});
+
+test('LLM_SYSTEM overrides the built-in persona', async () => {
+  setEnv({
+    LLM_PROVIDER: 'openai',
+    OPENAI_API_KEY: 'test-key',
+    OPENAI_BASE_URL: `${base}/v1`,
+    LLM_SYSTEM: 'You are a terse pirate.',
+  });
+
+  await collect(streamReply('Hi'));
+  const body = JSON.parse(requests.at(-1).body);
+  assert.deepEqual(body.messages[0], { role: 'system', content: 'You are a terse pirate.' });
+});
+
 test('OpenAI: maps HTTP errors to a useful message', async () => {
   setEnv({
     LLM_PROVIDER: 'openai',
