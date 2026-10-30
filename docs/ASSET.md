@@ -1,7 +1,8 @@
 # Replacing the avatar with your own face
 
-The shipped character is procedural — deliberately, so the repo runs with no
-downloads, no GPU, and no licence attached. This is how to swap in a real one.
+The default avatar is a personal LAM capture in `assets/me.avtr`, committed
+intentionally so the deployed site is not the procedural mannequin. This is how
+to swap in a different face.
 
 ## Where a rigged avatar comes from
 
@@ -20,15 +21,16 @@ vertex displacements through the same barycentric path (see *Under the hood*).
 
 ```bash
 node tools/import-mesh.mjs --list --in me.glb          # what shape keys does it have?
-node tools/import-mesh.mjs --in me.glb --out assets/me.avtr --count 40000
+node tools/import-mesh.mjs --in me.glb --out assets/me.avtr --count 20000
 node tools/check-avatar.mjs assets/me.avtr             # sanity-check the rig
 ```
 
-Then either replace `assets/head.avtr`, or point the client at the new file
-without touching anything:
+The client defaults to `/assets/me.avtr`, so replacing that file is enough for
+the deployed site (run `npm run build:web`). The local server can also serve any
+other asset under `assets/`:
 
 ```
-http://127.0.0.1:8787/client/?asset=/assets/me.avtr
+http://127.0.0.1:8787/client/?asset=/assets/other.avtr
 ```
 
 `?static=1` freezes the rig if you want to inspect the rest pose.
@@ -43,8 +45,8 @@ http://127.0.0.1:8787/client/?asset=/assets/me.avtr
 | `--list` | — | Print the shape keys and exit |
 
 Expect to adjust the camera afterwards. `client/app.js` starts at
-`dist: 0.70`, tuned for the 32 cm procedural bust; a head-only asset framed the
-same way sits a little tight. Scroll to zoom, then hard-code the value you like.
+`dist: 0.70`, tuned for the default capture; a differently sized head may sit a little
+tight or loose. Scroll to zoom, then hard-code the value you like.
 
 ## Under the hood
 
@@ -89,15 +91,15 @@ per-eye keys to the map.
 ## Checking the result
 
 ```
-$ node tools/check-avatar.mjs assets/head.avtr
-file      assets/head.avtr
-gaussians 38,587   channels 16
-height    32.7 cm   width 35.9 cm   payload 12.04 MB
+$ node tools/check-avatar.mjs assets/me.avtr
+file      assets/me.avtr
+gaussians 20,018   channels 16
+height    30.0 cm   width 32.7 cm   payload 6.25 MB
 
 channel            gaussians   max move   centroid
-  jawOpen             11881    38.9 mm  x 0.000 y -0.068
-  mouthSmile_L         9547     9.5 mm  x 0.011 y -0.052
-  eyeBlink_L           1220    18.6 mm  x 0.030 y 0.022
+  jawOpen              3256    46.5 mm  x 0.007 y -0.034
+  mouthSmile_L         2058     5.6 mm  x 0.014 y -0.017
+  eyeBlink_L           2439     9.4 mm  x 0.036 y 0.039
   …
 
 ✓  avatar looks consistent

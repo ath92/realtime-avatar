@@ -228,14 +228,14 @@ Operational notes:
 - `say` is not available on Workers. ElevenLabs or `none` only.
 - The TTS LRU and the rate-limit buckets are per isolate and disappear on
   eviction/restart. They are caches, not state.
-- The avatar asset is ~11.5 MB. It is served with `Cache-Control:
+- The avatar asset is ~6.25 MB. It is served with `Cache-Control:
   max-age=0, must-revalidate`, so repeat visits revalidate with an ETag instead
-  of downloading it again. First load is still a large download; the README's
-  "38k gaussians at 11 MB" note is the relevant follow-up.
-- The build copies every `assets/*.avtr` present. CI only has files tracked by
-  git (`assets/head.avtr`). A personal capture such as `assets/me.avtr` is
-  gitignored, so it is **not** deployed by CI; running `wrangler deploy` from a
-  machine that has it will upload it. Keep that in mind before deploying a face.
+  of downloading it again. First load is still a noticeable download; the
+  README's "20k gaussians at 6.25 MB" note is the relevant follow-up.
+- The build copies `assets/me.avtr` only. That file is intentionally tracked in
+  this public repo, so the deployed site serves your face. Other personal
+  captures matching `assets/me*.avtr` stay gitignored and are not copied; if you
+  replace the default, run `npm run build:web` and redeploy.
 
 ## Troubleshooting
 
@@ -252,7 +252,7 @@ Operational notes:
 | 429 | per-isolate rate limit; wait, raise `RATE_LIMIT_PER_MINUTE`, or add edge rate limiting |
 | 413 | request body over 64 KB; the browser only sends text + short history |
 | SSE stalls, no tokens | run `npx wrangler tail` and check the Worker logs; a provider 401/402 arrives as an `error` event |
-| First load is slow | the 11.5 MB avatar; verify the ETag/304 on the second load, and consider a smaller/quantised asset |
+| First load is slow | the 6.25 MB avatar; verify the ETag/304 on the second load, and consider a smaller/quantised asset |
 
 ## What changed for the cloud
 

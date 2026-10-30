@@ -51,7 +51,7 @@ jobs:
         run: npm test
 
       - name: Validate avatar asset
-        run: node tools/check-avatar.mjs assets/head.avtr
+        run: node tools/check-avatar.mjs assets/me.avtr
 
       - name: Build static site
         run: npm run build:web

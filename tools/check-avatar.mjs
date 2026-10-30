@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // Validate a .avtr rig before you ship it.
 //
-//   node tools/check-avatar.mjs assets/head.avtr
+//   node tools/check-avatar.mjs assets/me.avtr
 //
 // Catches the failure modes that are silent at runtime: non-finite data,
 // channels nothing drives, channels the audio pipeline emits but the asset does
@@ -41,7 +41,7 @@ const REGION = {
   noseSneer: { y: [-0.1, 0.1], label: 'nose' },
 };
 
-const path = resolve(process.argv[2] || 'assets/head.avtr');
+const path = resolve(process.argv[2] || 'assets/me.avtr');
 const errors = [];
 const warnings = [];
 

@@ -23,7 +23,7 @@ const pitch = Number(opt('pitch', 0));
 const camDist = Number(opt('dist', 0.62));
 const bg = Number(opt('bg', 0.10));
 
-const raw = readFileSync(opt('in', 'assets/head.avtr'));
+const raw = readFileSync(opt('in', 'assets/me.avtr'));
 const avatar = decodeAvatar(raw.buffer.slice(raw.byteOffset, raw.byteOffset + raw.byteLength));
 const { n, nb, names } = avatar;
 

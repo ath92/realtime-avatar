@@ -12,7 +12,7 @@ browser ──text──▶ server ──▶ LLM ──▶ TTS ──▶ audio �
 
 ![the avatar mid-sentence](docs/screenshot.png)
 
-The avatar is a static asset (~11 MB here) plus ~50 floats per frame. The server
+The avatar is a static asset (~6.25 MB here) plus ~50 floats per frame. The server
 never renders anything; the GPU cost per user is the user's own. That is the whole
 point of the design.
 
@@ -49,9 +49,9 @@ endpoint, and `ANTHROPIC_API_KEY` uses Anthropic. The full matrix, env vars, and
 troubleshooting are in **[docs/PROVIDERS.md](docs/PROVIDERS.md)**.
 
 ```bash
-node tools/make-avatar.mjs      # rebuild assets/head.avtr from the procedural rig
+node tools/make-avatar.mjs      # regenerate the procedural head (assets/head.avtr, ignored)
 node tools/preview.mjs --out preview.png --yaw 0.3 --preset talk
-node tools/check-avatar.mjs assets/head.avtr
+node tools/check-avatar.mjs assets/me.avtr
 npm test                        # provider + Worker tests, mocked (no keys/network)
 ```
 
@@ -84,27 +84,30 @@ security checklist are in **[docs/DEPLOY.md](docs/DEPLOY.md)**.
 | LLM (`server/pipeline/llm.mjs`) | real: DeepSeek, OpenAI-compatible, or Anthropic, streamed with history | — |
 | TTS (`server/pipeline/tts.mjs`) | real: ElevenLabs raw PCM, cached and retried | Cartesia / CosyVoice behind the same `speak()` |
 | Audio → blendshapes (`server/pipeline/a2e.mjs`) | classical DSP, works, not SOTA | LAM-A2E, or any streaming audio→expression model |
-| Avatar asset (`tools/rig.mjs`) | procedural mannequin | LAM / Avat3r / UIKA reconstruction of a real person |
+| Avatar asset (`assets/me.avtr`) | personal LAM capture, ~20k gaussians | replace with your own `.avtr` |
 
 With no keys, the demo falls back to macOS `say` and a canned LLM; the table
 above describes the wired configuration. The last row is the one that matters
 for visual quality — everything above it is plumbing around a `.avtr` file whose
 interface is: *N gaussians + a blendshape rig*.
 
-## Use your own face
+## Replace the avatar
 
-The shipped character is procedural so the repo runs with no downloads, no GPU and
-no licence. To swap in a real one, you need a **rigged head mesh** — any GLB with
-ARKit shape keys (a scan + Faceit in Blender, or an avatar SDK export):
+The default is a personal LAM capture in `assets/me.avtr` (~20k gaussians). It is
+intentionally tracked in this public repo. To swap in a different face, you need
+a **rigged head mesh** — any GLB with ARKit shape keys (a scan + Faceit in
+Blender, or an avatar SDK export):
 
 ```bash
 node tools/import-mesh.mjs --list --in me.glb
-node tools/import-mesh.mjs --in me.glb --out assets/me.avtr --count 40000
+node tools/import-mesh.mjs --in me.glb --out assets/me.avtr --count 20000
 node tools/check-avatar.mjs assets/me.avtr
+npm run build:web
 ```
 
-Then open `/client/?asset=/assets/me.avtr`. No code changes: channels are matched
-by name, morph targets become per-Gaussian deltas, and the client keeps working.
+The client defaults to `/assets/me.avtr`; `?asset=/assets/<name>.avtr` still works
+for assets you add locally. Channels are matched by name, morph targets become
+per-Gaussian deltas, and the client keeps working.
 
 Full walkthrough, including the channel mapping table: **[docs/ASSET.md](docs/ASSET.md)**.
 
@@ -143,7 +146,7 @@ Docker is there too (`tools/lam/Dockerfile`). Step-by-step for both:
 | First audio out (stub LLM, `say`) | **1.4 s** |
 | TTS per sentence (`say`) | ~520 ms |
 | Audio → blendshape frames (4 s of speech) | 12 ms |
-| Deform 38k gaussians (CPU) | ~1 ms |
+| Deform 20k gaussians (CPU) | ~1 ms |
 | Splat + sort | renderer-side, see `docs/ARCHITECTURE.md` |
 
 Well under 16 ms of avatar work per frame. The latency you feel is LLM + TTS, not
@@ -162,8 +165,8 @@ server/pipeline/   llm · tts · audio→blendshapes · wav · http · turn
 shared/format.mjs  the .avtr container
 test/          provider, turn, and Worker routing/SSE tests (no keys/network)
 tools/
-  rig.mjs            procedural character
-  build-web.mjs      copy the client + avatars into dist/ for Workers
+  rig.mjs            procedural character generator
+  build-web.mjs      copy the client + default avatar into dist/ for Workers
   import-mesh.mjs    GLB with ARKit shape keys -> .avtr
   import-lam.mjs     LAM FLAME-space Gaussians -> .avtr (re-binds the rig)
   arkit-map.mjs      ARKit 52 -> rig 16 channel mapping, shared by both
@@ -176,7 +179,7 @@ tools/
   make-test-glb.mjs  synthetic rigged fixture for tests
   smoke.mjs          provider smoke test: LLM + TTS, no browser
   voices.mjs         list ElevenLabs voices
-assets/        head.avtr
+assets/        me.avtr (tracked default)
 docs/          architecture, asset pipeline, provider setup, deployment
 wrangler.toml  Worker + static assets config
 ```
@@ -196,7 +199,7 @@ wrangler.toml  Worker + static assets config
 - **No visemes worth the name.** The DSP mapper tracks loudness and spectral
   centroid. It looks plausible; it is not lip-accurate.
 - **Flat lighting.** Colours are baked SH-less; no relighting, no shadows.
-- **38k gaussians at 11 MB.** Fine on desktop, wasteful on mobile. Quantise and
+- **20k gaussians at 6.25 MB.** Fine on desktop, heavier on mobile. Quantise and
   prune (see CVPR'26 mobile avatar work) before shipping.
 - **The importer is verified against a synthetic fixture**, not against every
   commercial GLB. `--list` plus `check-avatar` localises most surprises.
@@ -220,5 +223,6 @@ deployed site behind Cloudflare Access (see **[docs/DEPLOY.md](docs/DEPLOY.md#se
 
 ## License
 
-Scaffold code: do what you like. The character is procedural, so there is no
-likeness to worry about.
+Scaffold code: do what you like. The avatar asset in `assets/me.avtr` is a
+personal capture and is **not** licensed for reuse; replace it with your own
+asset if you redistribute the repo.

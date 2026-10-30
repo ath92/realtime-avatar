@@ -89,7 +89,7 @@ renderer.draw(positions, poseMatrix, camera)
 
 `positions[i] = base[i] + Σ_b w[i][b] · value[b] · delta[i][b]`
 
-265k multiply-adds per frame at 38k gaussians × ~7 active channels, ~1 ms in JS.
+~140k multiply-adds per frame at 20k gaussians × ~7 active channels, ~1 ms in JS.
 Only channels with a non-zero value are visited. Above ~100k gaussians move this
 into the vertex shader with a delta texture and a `weights` texel fetch.
 
@@ -103,9 +103,9 @@ Instanced quads, one per Gaussian, 14 floats of instance data.
 - Fragment shader is `exp(-0.5 r²)` in σ units, with alpha blending.
 - **Back-to-front order is required** for correct compositing, so Gaussians are
   depth-sorted every frame with a 65 536-bucket counting sort (O(n), ~0.3 ms at
-  38k) and the instance buffer is rebuilt in sorted order.
+  20k) and the instance buffer is rebuilt in sorted order.
 
-That last point is the main bandwidth cost: ~2 MB of `bufferSubData` per frame.
+That last point is the main bandwidth cost: ~1 MB of `bufferSubData` per frame.
 Acceptable on desktop, questionable on mobile. The upgrade path is a compute-pass
 sort plus texture-sampled attributes indexed by a sorted index buffer — same math,
 one tenth the upload.

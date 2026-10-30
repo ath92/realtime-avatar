@@ -8,12 +8,15 @@
 // handful of browser files to dist/, rewrites the single ../shared import, and
 // copies the avatar assets. No bundler, no dependencies.
 
-import { copyFile, mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises';
+import { copyFile, mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { join, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const ROOT = resolve(fileURLToPath(new URL('..', import.meta.url)));
 const DIST = resolve(ROOT, 'dist');
+// The one avatar that ships. Keeping this explicit avoids accidentally
+// uploading other personal captures that happen to be in assets/.
+const DEFAULT_AVATAR = 'me.avtr';
 
 // Refuse to rm anything that is not exactly <repo>/dist.
 if (DIST !== join(ROOT, 'dist') || !DIST.startsWith(ROOT + sep)) {
@@ -50,19 +53,20 @@ if (rewritten === app) {
 }
 await writeFile(appPath, rewritten);
 
-const avatars = (await readdir(join(ROOT, 'assets'), { withFileTypes: true }))
-  .filter((entry) => entry.isFile() && entry.name.endsWith('.avtr'))
-  .map((entry) => entry.name)
-  .sort();
-if (!avatars.length) {
-  throw new Error('build-web: no .avtr files in assets/ (run node tools/make-avatar.mjs)');
+const avatarPath = join(ROOT, 'assets', DEFAULT_AVATAR);
+let avatarInfo;
+try {
+  avatarInfo = await stat(avatarPath);
+} catch {
+  throw new Error(`build-web: missing assets/${DEFAULT_AVATAR} (the default avatar must be tracked)`);
 }
-for (const name of avatars) {
-  await copyFile(join(ROOT, 'assets', name), join(DIST, 'assets', name));
+if (!avatarInfo.isFile()) {
+  throw new Error(`build-web: assets/${DEFAULT_AVATAR} is not a file`);
 }
+await copyFile(avatarPath, join(DIST, 'assets', DEFAULT_AVATAR));
 
 // Workers Static Assets reads _headers with the site. ETag revalidation keeps
-// the 12 MB avatar cheap on repeat visits without risking a stale head after a
+// the 6 MB avatar cheap on repeat visits without risking a stale head after a
 // deploy.
 await writeFile(join(DIST, '_headers'), [
   '/*',
@@ -80,13 +84,5 @@ await writeFile(join(DIST, '_headers'), [
 // real control, but this is a cheap default.
 await writeFile(join(DIST, 'robots.txt'), 'User-agent: *\nDisallow: /\n');
 
-const bytes = await Promise.all(avatars.map(async (name) => {
-  const data = await readFile(join(ROOT, 'assets', name));
-  return { name, size: data.length };
-}));
-const total = bytes.reduce((sum, file) => sum + file.size, 0);
-
-console.log(`dist/ ready (${CLIENT_FILES.length} client files, ${avatars.length} avatar${avatars.length === 1 ? '' : 's'}, ${(total / 1024 / 1024).toFixed(1)} MB)`);
-for (const file of bytes) {
-  console.log(`  assets/${file.name}  ${(file.size / 1024 / 1024).toFixed(1)} MB`);
-}
+console.log(`dist/ ready (${CLIENT_FILES.length} client files, 1 avatar, ${(avatarInfo.size / 1024 / 1024).toFixed(1)} MB)`);
+console.log(`  assets/${DEFAULT_AVATAR}  ${(avatarInfo.size / 1024 / 1024).toFixed(1)} MB`);

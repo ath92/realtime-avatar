@@ -18,8 +18,12 @@ __pycache__/
 *.pyc
 .uv/
 
-# personal avatar captures — never commit these
+# personal avatar captures — only the chosen default is tracked
 assets/me*.avtr
+!assets/me.avtr
+
+# generated procedural fallback (not the default)
+assets/head.avtr
 me-export/
 me.ply
 reference-status.ply

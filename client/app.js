@@ -16,7 +16,7 @@ const resetEl = $('#reset');
 
 const params = new URLSearchParams(location.search);
 const STATIC = params.has('static');        // ?static=1 freezes the rig at rest
-const ASSET = params.get('asset') || '/assets/head.avtr';   // ?asset=/path/to/other.avtr
+const ASSET = params.get('asset') || '/assets/me.avtr';     // ?asset=/path/to/other.avtr
 
 const state = {
   avatar: null,
