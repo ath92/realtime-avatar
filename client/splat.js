@@ -168,8 +168,10 @@ const BUCKETS = 1 << 16;
 export class SplatRenderer {
   constructor(canvas) {
     this.canvas = canvas;
+    // Alpha, not an opaque clear: the page background shows through wherever
+    // the head isn't, which is what lets the transcript sit behind the avatar.
     const gl = canvas.getContext('webgl2', {
-      alpha: false, antialias: false, depth: false, stencil: false,
+      alpha: true, antialias: false, depth: false, stencil: false,
       powerPreference: 'high-performance', preserveDrawingBuffer: false,
     });
     if (!gl) throw new Error('WebGL2 is required');
@@ -216,7 +218,7 @@ export class SplatRenderer {
     gl.disable(gl.DEPTH_TEST);
     gl.enable(gl.BLEND);
     gl.blendFuncSeparate(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA, gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
-    gl.clearColor(0.055, 0.06, 0.075, 1);
+    gl.clearColor(0, 0, 0, 0);
   }
 
   setAvatar(avatar) {
