@@ -41,9 +41,11 @@ client aborts the previous turn when a new one starts; the server aborts the
 in-flight LLM request and any queued TTS calls when the SSE socket closes, so a
 cancelled turn stops costing tokens and characters.
 
-`segment.audio` and `segment.frames` are plain GETs under `/media/<id>`. Media
-lives in a bounded in-memory map (96 entries, FIFO) — swap for object storage
-when you have more than one process.
+`segment.audio` and `segment.frames` are plain GETs under `/media/<id>` in the
+local Node server. Media lives in a bounded in-memory map (96 entries, FIFO).
+The Cloudflare Worker has no shared memory between isolates, so it inlines
+`audioBase64` and `framesData` in the same SSE event instead; see
+**[DEPLOY.md](DEPLOY.md)**.
 
 ### Provider adapters
 
@@ -119,6 +121,27 @@ weights   [n*nb]  deltas [n*nb*3]
 Dense and stupid on purpose; gzip does the compressing (mostly-zero delta block).
 `shared/format.mjs` is the only reader/writer. Ship it as glTF + extensions if you
 need interoperability; nothing else depends on the format.
+
+## Deployment topology
+
+```
+Cloudflare Worker (realtime-avatar)
+  ├─ /api/turn    POST → SSE, runs the same turn pipeline as server.mjs
+  ├─ /api/health  GET  → resolved providers
+  └─ /*           GET  → Cloudflare asset router → dist/ (client + .avtr)
+```
+
+`server/pipeline/turn.mjs` is the shared orchestration; the transport is an
+injected `emit(event, data)`. The local entry writes SSE and stores media in
+memory. The Worker writes SSE and base64-inlines the WAV plus the frames object,
+so it stays stateless and horizontal scaling is just more isolates. The cost is
+wire size (base64 is ~33% larger than the WAV) and CPU for the DSP per sentence;
+use Workers Paid rather than the Free plan's 10 ms CPU budget.
+
+Deploy with `wrangler` on push to `main`; provider keys are Worker secrets. See
+**[DEPLOY.md](DEPLOY.md)** for setup, security, and limits, and
+**[ARCHITECTURE-BEFORE-AFTER.md](ARCHITECTURE-BEFORE-AFTER.md)** for the
+side-by-side diagrams.
 
 ## Scaling notes
 

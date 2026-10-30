@@ -1,8 +1,16 @@
 // Minimal WAV helpers. We standardise on 32-bit float mono, which is what
 // `afconvert -d LEF32@22050` gives us and what WebAudio decodes natively.
+//
+// Deliberately Buffer-free: the same code runs in Node and in a Cloudflare
+// Worker, where only Uint8Array/DataView exist.
+
+function asBytes(buf) {
+  return buf instanceof Uint8Array ? buf : new Uint8Array(buf);
+}
 
 export function readWav(buf) {
-  const dv = new DataView(buf.buffer, buf.byteOffset, buf.byteLength);
+  const bytes = asBytes(buf);
+  const dv = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
   if (dv.getUint32(0, false) !== 0x52494646) throw new Error('not a RIFF file');
 
   let pos = 12;
@@ -43,20 +51,25 @@ export function readWav(buf) {
 
 export function writeWavFloat32(samples, sampleRate) {
   const n = samples.length;
-  const buf = Buffer.alloc(44 + n * 4);
-  buf.write('RIFF', 0);
-  buf.writeUInt32LE(36 + n * 4, 4);
-  buf.write('WAVE', 8);
-  buf.write('fmt ', 12);
-  buf.writeUInt32LE(16, 16);
-  buf.writeUInt16LE(3, 20);        // IEEE float
-  buf.writeUInt16LE(1, 22);        // mono
-  buf.writeUInt32LE(sampleRate, 24);
-  buf.writeUInt32LE(sampleRate * 4, 28);
-  buf.writeUInt16LE(4, 32);
-  buf.writeUInt16LE(32, 34);
-  buf.write('data', 36);
-  buf.writeUInt32LE(n * 4, 40);
-  for (let i = 0; i < n; i++) buf.writeFloatLE(samples[i], 44 + i * 4);
-  return buf;
+  const bytes = new Uint8Array(44 + n * 4);
+  const dv = new DataView(bytes.buffer);
+  const ascii = (offset, text) => {
+    for (let i = 0; i < text.length; i++) bytes[offset + i] = text.charCodeAt(i);
+  };
+
+  ascii(0, 'RIFF');
+  dv.setUint32(4, 36 + n * 4, true);
+  ascii(8, 'WAVE');
+  ascii(12, 'fmt ');
+  dv.setUint32(16, 16, true);
+  dv.setUint16(20, 3, true);        // IEEE float
+  dv.setUint16(22, 1, true);        // mono
+  dv.setUint32(24, sampleRate, true);
+  dv.setUint32(28, sampleRate * 4, true);
+  dv.setUint16(32, 4, true);
+  dv.setUint16(34, 32, true);
+  ascii(36, 'data');
+  dv.setUint32(40, n * 4, true);
+  for (let i = 0; i < n; i++) dv.setFloat32(44 + i * 4, samples[i], true);
+  return bytes;
 }

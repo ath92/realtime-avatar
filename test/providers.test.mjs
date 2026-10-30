@@ -9,7 +9,7 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { loadEnv, parseEnv } from '../server/env.mjs';
+import { loadEnv, parseEnv } from '../server/load-env.mjs';
 import { speak, listVoices } from '../server/pipeline/tts.mjs';
 import { streamReply, sanitizeHistory, llmProvider } from '../server/pipeline/llm.mjs';
 import { readWav } from '../server/pipeline/wav.mjs';
@@ -18,6 +18,7 @@ const ENV_KEYS = [
   'LLM_PROVIDER', 'OPENAI_API_KEY', 'OPENAI_BASE_URL', 'LLM_MODEL',
   'LLM_SYSTEM', 'LLM_TEMPERATURE', 'LLM_MAX_TOKENS', 'LLM_TIMEOUT_MS',
   'ANTHROPIC_API_KEY', 'ANTHROPIC_BASE_URL', 'ANTHROPIC_MODEL', 'ANTHROPIC_VERSION',
+  'DEEPSEEK_API_KEY', 'DEEPSEEK_BASE_URL',
   'TTS_PROVIDER', 'ELEVENLABS_API_KEY', 'ELEVENLABS_BASE_URL', 'ELEVENLABS_VOICE_ID',
   'ELEVENLABS_MODEL_ID', 'ELEVENLABS_OUTPUT_FORMAT', 'ELEVENLABS_STABILITY',
   'ELEVENLABS_SIMILARITY', 'ELEVENLABS_STYLE', 'ELEVENLABS_SPEED',
@@ -353,6 +354,37 @@ test('OpenAI: maps HTTP errors to a useful message', async () => {
   );
 });
 
+test('DeepSeek: one key selects the right endpoint and model', async () => {
+  setEnv({
+    DEEPSEEK_API_KEY: 'test-key',
+    DEEPSEEK_BASE_URL: `${base}/v1`,
+  });
+
+  assert.equal(llmProvider(), 'deepseek');
+  const text = await collect(streamReply('Hi'));
+  assert.equal(text, 'Hello there.');
+
+  const req = requests.find((r) => r.url === '/v1/chat/completions');
+  assert.equal(req.headers.authorization, 'Bearer test-key');
+  const body = JSON.parse(req.body);
+  assert.equal(body.model, 'deepseek-chat');
+  assert.equal(body.messages.at(-1).content, 'Hi');
+});
+
+test('DeepSeek: explicit provider wins over an OpenAI key', async () => {
+  setEnv({
+    LLM_PROVIDER: 'deepseek',
+    DEEPSEEK_API_KEY: 'deepseek-key',
+    DEEPSEEK_BASE_URL: `${base}/v1`,
+    OPENAI_API_KEY: 'openai-key',
+  });
+
+  assert.equal(llmProvider(), 'deepseek');
+  await collect(streamReply('Hi'));
+  const req = requests.find((r) => r.url === '/v1/chat/completions');
+  assert.equal(req.headers.authorization, 'Bearer deepseek-key');
+});
+
 test('Anthropic: streams deltas with system separate from messages', async () => {
   setEnv({
     LLM_PROVIDER: 'anthropic',
@@ -444,9 +476,16 @@ test('provider detection follows explicit env, then available keys', () => {
   process.env.OPENAI_API_KEY = 'x';
   assert.equal(llmProvider(), 'openai');
 
+  delete process.env.OPENAI_API_KEY;
+  process.env.DEEPSEEK_API_KEY = 'x';
+  assert.equal(llmProvider(), 'deepseek');
+
   process.env.LLM_PROVIDER = 'anthropic';
   assert.equal(llmProvider(), 'anthropic');
 
   process.env.LLM_PROVIDER = 'openai-compatible';
   assert.equal(llmProvider(), 'openai');
+
+  process.env.LLM_PROVIDER = 'deepseek';
+  assert.equal(llmProvider(), 'deepseek');
 });

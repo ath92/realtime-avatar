@@ -10,7 +10,7 @@
 import { writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { loadEnv } from '../server/env.mjs';
+import { loadEnv } from '../server/load-env.mjs';
 import { llmInfo, streamReply } from '../server/pipeline/llm.mjs';
 import { speak, ttsInfo } from '../server/pipeline/tts.mjs';
 import { analyze } from '../server/pipeline/a2e.mjs';

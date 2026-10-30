@@ -10,28 +10,14 @@
 
 <canvas id="view"></canvas>
 
-<header class="bar">
-  <div class="brand">
-    <span class="dot"></span>
-    <span class="name">avatar</span>
-    <span class="sub">gaussian head · webgl2</span>
-  </div>
-  <div id="status" class="pill">booting</div>
-</header>
-
-<section id="stats" class="stats"></section>
-
 <main class="dock">
-  <div id="transcript" class="transcript">
-    <div class="line system">Say something. Your text goes to the configured LLM and voice provider; the face is rendered in this tab.</div>
-  </div>
+  <div id="transcript" class="transcript"></div>
   <form class="composer" onsubmit="return false">
     <button id="reset" type="button" aria-label="New conversation" title="New conversation">↺</button>
     <input id="input" type="text" autocomplete="off" spellcheck="false"
            placeholder="Ask the avatar something…" />
     <button id="send" type="button" aria-label="Send">↵</button>
   </form>
-  <div class="hint">drag to orbit · scroll to zoom</div>
 </main>
 
 <script type="module" src="./app.js"></script>

@@ -37,11 +37,19 @@ export class Speaker {
     this.endAt = 0;
   }
 
-  async enqueue({ audioUrl, framesUrl, signal, isCurrent, onLoaded }) {
+  async enqueue({ audioUrl, framesUrl, audioBase64, framesData, signal, isCurrent, onLoaded }) {
     const ctx = this.ensure();
+
+    // The local Node server sends URLs into a small in-memory store. The
+    // Cloudflare Worker has no shared memory between isolates, so it inlines
+    // the WAV (base64) and the frames object in the SSE segment instead.
     const [buf, frames] = await Promise.all([
-      fetch(audioUrl, { signal }).then((r) => r.arrayBuffer()),
-      fetch(framesUrl, { signal }).then((r) => r.json()),
+      audioBase64
+        ? Promise.resolve(base64ToArrayBuffer(audioBase64))
+        : fetch(audioUrl, { signal }).then((r) => r.arrayBuffer()),
+      framesData
+        ? Promise.resolve(framesData)
+        : fetch(framesUrl, { signal }).then((r) => r.json()),
     ]);
 
     // A newer turn may have started while these were in flight.
@@ -114,4 +122,11 @@ export class Speaker {
   get queued() {
     return this.segments.length;
   }
+}
+
+export function base64ToArrayBuffer(b64) {
+  const binary = atob(b64);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+  return bytes.buffer;
 }
