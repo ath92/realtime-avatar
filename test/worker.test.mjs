@@ -7,6 +7,7 @@ import assert from 'node:assert/strict';
 
 import worker from '../worker/index.mjs';
 import { setEnvSource } from '../server/env.mjs';
+import { encodeWav16 } from '../client/mic.js';
 
 function bindings(extra = {}) {
   return {
@@ -39,6 +40,8 @@ test('health reports the resolved key-free providers', async () => {
   assert.equal(body.ok, true);
   assert.equal(body.llm.provider, 'stub');
   assert.equal(body.tts.provider, 'none');
+  assert.equal(body.stt.provider, 'none');
+  assert.equal(body.stt.available, false);
   assert.equal(res.headers.get('x-robots-tag'), 'noindex, nofollow');
 });
 
@@ -101,5 +104,73 @@ test('POST /api/turn streams inline audio and frames, then done', async () => {
   assert.match(wire, /"framesData":\{/);
   assert.match(wire, /event: done/);
 
+  setEnvSource(null);
+});
+
+test('POST /api/transcribe returns the transcript as JSON', async () => {
+  const originalFetch = globalThis.fetch;
+  let upstream;
+  globalThis.fetch = async (url, init) => {
+    upstream = { url: String(url), body: init?.body };
+    return new Response(JSON.stringify({ text: 'spoken words', language_code: 'eng' }), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    });
+  };
+
+  try {
+    const res = await worker.fetch(
+      new Request('https://avatar.test/api/transcribe', {
+        method: 'POST',
+        headers: { 'Content-Type': 'audio/wav', Origin: 'https://avatar.test' },
+        body: encodeWav16(new Float32Array(8000).fill(0.2), 16000),
+      }),
+      bindings({ STT_PROVIDER: 'elevenlabs', ELEVENLABS_API_KEY: 'test-key' }),
+      context(),
+    );
+
+    assert.equal(res.status, 200);
+    const body = await res.json();
+    assert.equal(body.text, 'spoken words');
+    assert.equal(body.provider, 'elevenlabs');
+
+    assert.match(upstream.url, /\/v1\/speech-to-text/);
+    assert.equal(upstream.body instanceof FormData, true);
+  } finally {
+    globalThis.fetch = originalFetch;
+    setEnvSource(null);
+  }
+});
+
+test('POST /api/transcribe is a clear 503 when no key is configured', async () => {
+  const res = await worker.fetch(
+    new Request('https://avatar.test/api/transcribe', {
+      method: 'POST',
+      headers: { 'Content-Type': 'audio/wav', Origin: 'https://avatar.test' },
+      body: new Uint8Array([1, 2, 3, 4]),
+    }),
+    bindings(),
+    context(),
+  );
+
+  assert.equal(res.status, 503);
+  const body = await res.json();
+  assert.match(body.error, /not configured/);
+  assert.match(body.hint, /ELEVENLABS_API_KEY/);
+  setEnvSource(null);
+});
+
+test('POST /api/transcribe rejects a non-audio body without calling a provider', async () => {
+  const res = await worker.fetch(
+    new Request('https://avatar.test/api/transcribe', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Origin: 'https://avatar.test' },
+      body: JSON.stringify({ text: 'nope' }),
+    }),
+    bindings({ STT_PROVIDER: 'elevenlabs', ELEVENLABS_API_KEY: 'test-key' }),
+    context(),
+  );
+
+  assert.equal(res.status, 415);
   setEnvSource(null);
 });

@@ -1,13 +1,15 @@
 # realtime-avatar
 
 A realtime, photoreal-*ish* head avatar that runs in a browser tab and talks back.
-Text in → LLM reply → speech out → the face moves → everything renders client-side
-as 3D Gaussians.
+Talk or type → LLM reply → speech out → the face moves → everything renders
+client-side as 3D Gaussians.
 
 ```
-browser ──text──▶ server ──▶ LLM ──▶ TTS ──▶ audio → blendshapes ──▶ SSE
-   ▲                                                                  │
-   └──────────── WebGL2 gaussian splatting ◀── audio + 60 fps stream ──┘
+mic ──▶ speech → text ──┐
+                        ├──▶ server ──▶ LLM ──▶ TTS ──▶ audio → blendshapes ──▶ SSE
+keyboard ───────────────┘                                                        │
+   ▲                                                                             │
+   └──────────── WebGL2 gaussian splatting ◀──── audio + 60 fps stream ──────────┘
 ```
 
 ![the avatar mid-sentence](docs/screenshot.png)
@@ -27,6 +29,13 @@ No dependencies, no build step for local development, and no API key is required
 elsewhere it falls back to a synthetic babble, and the LLM streams a canned reply
 so the pipeline still runs.
 
+Click the microphone and just talk: the recorder stops when you pause, the server
+transcribes it, and the text takes the same path as typing. Typing still works,
+and Esc cancels a recording or a transcription in flight. Voice input needs a
+speech-to-text provider — see below — but the avatar itself does not.
+
+![the avatar listening](docs/voice.png)
+
 For a real conversation, copy the example env file and fill in what you have:
 
 ```bash
@@ -34,9 +43,16 @@ cp .env.example .env
 # ELEVENLABS_API_KEY=...                            real voice
 # DEEPSEEK_API_KEY=... (or OPENAI_API_KEY / ANTHROPIC_API_KEY)  real replies
 node server/server.mjs
-npm run smoke                                  # checks both providers, no browser
+npm run smoke                                  # checks LLM + TTS + speech-to-text, no browser
 npm run voices                                 # list ElevenLabs voice IDs
 ```
+
+Voice input reuses `ELEVENLABS_API_KEY` (Scribe) or `OPENAI_API_KEY` (Whisper),
+so it needs no second account. The ElevenLabs key must have the
+**speech_to_text** permission enabled — a key scoped to `text_to_speech` only,
+which is enough for the avatar's own voice, returns `401` on the first
+recording. Add it under **ElevenLabs → profile → API keys**, then restart. No
+key at all simply turns the mic off, with a note in the transcript.
 
 The server loads `.env` on every start, so there is nothing to `source` or
 export before `npm start`. Keep the file private (`chmod 600 .env`); it is
@@ -72,8 +88,11 @@ git push origin main
 
 The workflow tests, builds `dist/`, deploys the Worker, and pushes the provider
 keys as Worker secrets. `say` is macOS-only, so the cloud voice is ElevenLabs
-(or the synthetic fallback if no key is set). Setup, custom domains, and the
-security checklist are in **[docs/DEPLOY.md](docs/DEPLOY.md)**.
+(or the synthetic fallback if no key is set). The same key transcribes voice
+input; it needs the `speech_to_text` permission for the mic to work, and the site
+must be served over https (Workers are), because browsers only record on a secure
+origin. Setup, custom domains, and the security checklist are in
+**[docs/DEPLOY.md](docs/DEPLOY.md)**.
 
 ## What is real, what is a stand-in
 
@@ -82,6 +101,7 @@ security checklist are in **[docs/DEPLOY.md](docs/DEPLOY.md)**.
 | Gaussian rig + WebGL2 renderer | real | — |
 | Sorting, deformation, idle motion | real | — |
 | LLM (`server/pipeline/llm.mjs`) | real: DeepSeek, OpenAI-compatible, or Anthropic, streamed with history | — |
+| Speech → text (`server/pipeline/stt.mjs`) | real: ElevenLabs Scribe or OpenAI Whisper | Deepgram / AssemblyAI behind the same `transcribe()` |
 | TTS (`server/pipeline/tts.mjs`) | real: ElevenLabs raw PCM, cached and retried | Cartesia / CosyVoice behind the same `speak()` |
 | Audio → blendshapes (`server/pipeline/a2e.mjs`) | classical DSP, works, not SOTA | LAM-A2E, or any streaming audio→expression model |
 | Avatar asset (`assets/me.avtr`) | personal LAM capture, ~20k gaussians | replace with your own `.avtr` |
@@ -153,17 +173,23 @@ Well under 16 ms of avatar work per frame. The latency you feel is LLM + TTS, no
 the face. Provider latency varies by model, region, and load; `npm run smoke`
 prints the first-token and TTS timings for your setup.
 
+Voice input adds one provider round trip before the turn starts (record → upload
+→ transcribe → send), so the answer arrives that much later than it would from
+the keyboard. The recorder stops ~1.1 s after you stop talking; `npm run smoke`
+prints the transcription time.
+
 ## Layout
 
 ```
 client/        app shell, WebGL2 splatter, rig, idle motion, audio clock
+client/mic.js  microphone capture, voice-activity stop, 16 kHz WAV
 worker/        Cloudflare Worker entry (API proxy + static assets)
 server/        local static host + SSE orchestrator
 server/env.mjs     typed env readers (Node + Worker)
 server/load-env.mjs  .env loader (Node only)
-server/pipeline/   llm · tts · audio→blendshapes · wav · http · turn
+server/pipeline/   llm · stt · tts · audio→blendshapes · wav · http · turn
 shared/format.mjs  the .avtr container
-test/          provider, turn, and Worker routing/SSE tests (no keys/network)
+test/          provider, turn, client, and Worker routing/SSE tests (no keys/network)
 tools/
   rig.mjs            procedural character generator
   build-web.mjs      copy the client + default avatar into dist/ for Workers
@@ -177,7 +203,7 @@ tools/
   check-avatar.mjs   rig validator (CI-friendly)
   preview.mjs        software renderer, no GPU
   make-test-glb.mjs  synthetic rigged fixture for tests
-  smoke.mjs          provider smoke test: LLM + TTS, no browser
+  smoke.mjs          provider smoke test: LLM + TTS + STT, no browser
   voices.mjs         list ElevenLabs voices
 assets/        me.avtr (tracked default)
 docs/          architecture, asset pipeline, provider setup, deployment
@@ -186,6 +212,18 @@ wrangler.toml  Worker + static assets config
 
 ## Known gaps
 
+- **Voice input is one utterance at a time.** There is no streaming ASR socket:
+  you talk, the pause ends the utterance, then transcription starts. That wait
+  (~0.5–1 s) sits in front of the first token. A realtime socket — Scribe's
+  websocket, Deepgram, or AssemblyAI behind the same `transcribe()` — would
+  remove it and could show partial transcripts while you speak.
+- **Voice activity detection is an RMS threshold**, not a trained VAD. A noisy
+  room can keep the microphone open until the 30 s cap, and very quiet speech can
+  be trimmed away; the UI shows the live level so it is at least visible.
+- **The mic needs a secure origin and a permission.** `http://127.0.0.1` counts;
+  a deployed Worker is https. Chrome records Opus/WebM and Safari records AAC/MP4,
+  and the client decodes both to 16 kHz mono WAV so the server (and the providers)
+  see one format.
 - **Segment seams.** Each sentence is synthesised as it streams in, so if TTS is
   slower than playback there is a silence gap where the mouth snaps shut. Fix:
   clause-level chunking plus a small pre-synthesis buffer.
@@ -211,11 +249,16 @@ wrangler.toml  Worker + static assets config
 
 With a cloud LLM and ElevenLabs configured, the user's text and the model's
 reply are sent to those APIs, and generated audio comes back from ElevenLabs.
-Nothing else leaves: the avatar asset, the blendshape track, and all rendering
-stay in the browser. With the stub LLM and `say`, no text leaves the machine.
+When you use the microphone, the recorded utterance (trimmed to the speech, at
+most 30 s) is uploaded to the server and forwarded to the speech-to-text
+provider; neither the Node server nor the Worker stores it. Nothing else leaves:
+the avatar asset, the blendshape track, and all rendering stay in the browser.
+With the stub LLM and `say`, no text leaves the machine — but voice input still
+needs a speech-to-text provider, so it stays off unless you configure one.
 
 ElevenLabs logs requests by default; zero-retention mode
-(`ELEVENLABS_ENABLE_LOGGING=false`) is an enterprise feature. The server holds
+(`ELEVENLABS_ENABLE_LOGGING=false`) is an enterprise feature and is passed to both
+TTS and speech-to-text. The server holds
 your API keys — do not expose it publicly without auth and rate limits, or
 strangers will spend your credits. The Cloudflare Worker adds a same-origin check
 and a best-effort per-isolate rate limit, but that is not authentication; put the

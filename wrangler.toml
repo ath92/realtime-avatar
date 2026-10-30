@@ -1,7 +1,7 @@
 # Cloudflare Worker + static assets.
 #
 # One deployment serves both halves of the app:
-#   /api/*   -> worker/index.mjs (LLM + TTS proxy, SSE)
+#   /api/*   -> worker/index.mjs (STT + LLM + TTS proxy, SSE)
 #   /*       -> dist/ (built by tools/build-web.mjs)
 #
 # Deploy: npm run build:web && npx wrangler deploy

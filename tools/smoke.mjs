@@ -13,6 +13,7 @@ import { join } from 'node:path';
 import { loadEnv } from '../server/load-env.mjs';
 import { llmInfo, streamReply } from '../server/pipeline/llm.mjs';
 import { speak, ttsInfo } from '../server/pipeline/tts.mjs';
+import { transcribe, sttInfo } from '../server/pipeline/stt.mjs';
 import { analyze } from '../server/pipeline/a2e.mjs';
 import { readWav } from '../server/pipeline/wav.mjs';
 import { deadline } from '../server/pipeline/http.mjs';
@@ -34,7 +35,11 @@ if (has('--help') || has('-h')) {
   --out <path>   where to write the WAV (default: <tmp>/avatar-smoke.wav)
   --json         machine-readable output
   --no-llm       skip the LLM check
-  --no-tts       skip the TTS check`);
+  --no-tts       skip the TTS check
+  --no-stt       skip the speech-to-text check
+
+The STT check feeds the TTS output back through the transcriber, so it only runs
+when the TTS check produced audio.`);
   process.exit(0);
 }
 
@@ -47,8 +52,10 @@ const report = {
   env: { loaded: envLoad.loaded, count: envLoad.count, path: envLoad.path },
   llm: llmInfo(),
   tts: ttsInfo(),
+  stt: sttInfo(),
   llmResult: null,
   ttsResult: null,
+  sttResult: null,
   errors: [],
 };
 
@@ -59,6 +66,7 @@ if (!json) {
   console.log(`  llm  ${report.llm.provider} · ${report.llm.model}${report.llm.available ? '' : ' (no key)'}`);
   const voice = report.tts.voiceName || report.tts.voiceId || report.tts.voice || report.tts.model || '';
   console.log(`  tts  ${report.tts.provider}${voice ? ` · ${voice}` : ''}${report.tts.available ? '' : ' (unavailable)'}`);
+  console.log(`  stt  ${report.stt.provider}${report.stt.model && report.stt.provider !== 'none' ? ` · ${report.stt.model}` : ''}${report.stt.available ? '' : ' (voice input off)'}`);
   console.log('');
 }
 
@@ -95,6 +103,7 @@ async function checkTts() {
   const speech = await speak(ttsText, { signal });
   if (!speech) throw new Error('TTS returned no audio');
   const ttsMs = performance.now() - started;
+  ttsWav = speech.wav;
 
   const a2eStarted = performance.now();
   const { samples, sampleRate, duration } = readWav(speech.wav);
@@ -121,6 +130,42 @@ async function checkTts() {
   }
 }
 
+// The STT check reuses the TTS audio: speak a known line, transcribe it, count
+// how many words survived the round trip. It only runs when there is audio.
+let ttsWav = null;
+
+async function checkStt() {
+  if (!report.stt.available) {
+    throw new Error(`${report.stt.provider} is not usable; ${report.stt.hint || 'check .env'}`);
+  }
+  if (!ttsWav) throw new Error('no audio to transcribe; run the TTS check too');
+
+  const started = performance.now();
+  const result = await transcribe(ttsWav, { mime: 'audio/wav', signal });
+  const ms = performance.now() - started;
+  if (!result.text) throw new Error('speech-to-text returned nothing');
+
+  // A cheap sanity check, not a WER benchmark: how many spoken words came back.
+  const words = (s) => String(s).toLowerCase().match(/[\p{L}\p{N}']+/gu) || [];
+  const heard = new Set(words(result.text));
+  const expected = words(ttsText);
+  const found = expected.filter((w) => heard.has(w)).length;
+
+  report.sttResult = {
+    text: result.text,
+    provider: result.provider,
+    model: result.model,
+    language: result.language || null,
+    ms: Math.round(ms),
+    words: `${found}/${expected.length}`,
+    verified: expected.length > 0 && found / expected.length >= 0.6,
+  };
+  if (!json) {
+    console.log(`stt  ${Math.round(ms)} ms, ${found}/${expected.length} words matched`);
+    console.log(`     "${result.text.slice(0, 240)}"`);
+  }
+}
+
 try {
   if (!has('--no-llm')) await checkLlm();
 } catch (err) {
@@ -133,6 +178,13 @@ try {
 } catch (err) {
   report.errors.push(`tts: ${err.message}`);
   if (!json) console.error(`tts  FAILED: ${err.message}`);
+}
+
+try {
+  if (!has('--no-stt')) await checkStt();
+} catch (err) {
+  report.errors.push(`stt: ${err.message}`);
+  if (!json) console.error(`stt  FAILED: ${err.message}`);
 }
 
 if (json) {

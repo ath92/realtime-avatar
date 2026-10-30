@@ -5,6 +5,7 @@ import { SplatRenderer, mat4 } from './splat.js';
 import { Rig } from './rig.js';
 import { Idle } from './idle.js';
 import { Speaker } from './audio.js';
+import { VoiceRecorder, micSupported } from './mic.js';
 
 const $ = (sel) => document.querySelector(sel);
 
@@ -13,6 +14,10 @@ const logEl = $('#transcript');
 const inputEl = $('#input');
 const sendEl = $('#send');
 const resetEl = $('#reset');
+const micEl = $('#mic');
+const voiceEl = $('#voice');
+const voiceLabelEl = $('#voice-label');
+const voiceMeterEl = $('#voice-meter');
 
 const params = new URLSearchParams(location.search);
 const STATIC = params.has('static');        // ?static=1 freezes the rig at rest
@@ -32,6 +37,9 @@ const state = {
   turnAbort: null,
   turnGen: 0,
   history: [],
+  stt: null,
+  // Voice input: one recorder per utterance, one fetch per transcription.
+  voice: { recorder: null, abort: null, stopping: false, gen: 0 },
 };
 
 // ---------------------------------------------------------------- bootstrap
@@ -48,6 +56,7 @@ async function main() {
   requestAnimationFrame(loop);
 
   loadHealth();
+  setupVoice();
   window.addEventListener('resize', () => state.renderer.resize());
 }
 
@@ -73,6 +82,15 @@ async function loadHealth() {
 
     if (llm.available === false) {
       appendSystem(`warning: ${llm.provider} has no key — check .env or the Worker secrets before talking to it.`);
+    }
+
+    // Voice input is optional: typing always works, so say what is missing
+    // instead of letting the mic fail with a 503 later.
+    state.stt = health.stt || null;
+    if (state.stt && state.stt.available === false) {
+      micEl.disabled = true;
+      micEl.title = 'Voice input has no speech-to-text key';
+      appendSystem(`Voice input is off: ${state.stt.hint || `no speech-to-text provider (${state.stt.provider || 'none'})`}. Typing still works.`);
     }
   } catch {
     // Health is best-effort; the avatar still renders without it.
@@ -246,12 +264,171 @@ function appendUser(text) {
   logEl.scrollTop = logEl.scrollHeight;
 }
 
-// ---------------------------------------------------------------- interaction
+// ---------------------------------------------------------------- voice ----
+// The browser records one utterance, /api/transcribe turns it into text, and
+// that text takes the exact same path as something typed. Hands-free is the
+// default: the recorder notices the pause after a sentence and stops itself.
 
-async function submit() {
+const VOICE_LABELS = {
+  listening: 'Listening…',
+  transcribing: 'Transcribing…',
+};
+
+function setupVoice() {
+  if (!micSupported()) {
+    micEl.disabled = true;
+    micEl.title = 'This browser cannot record audio';
+    return;
+  }
+  micEl.addEventListener('click', toggleVoice);
+}
+
+function setVoiceMode(mode) {
+  if (mode === 'idle') {
+    voiceEl.hidden = true;
+    micEl.classList.remove('listening', 'transcribing');
+    micEl.setAttribute('aria-pressed', 'false');
+    micEl.setAttribute('aria-label', 'Talk to the avatar');
+    setVoiceLevel(0);
+    return;
+  }
+  voiceEl.hidden = false;
+  voiceEl.dataset.mode = mode;
+  voiceLabelEl.textContent = VOICE_LABELS[mode] || '';
+  micEl.classList.toggle('listening', mode === 'listening');
+  micEl.classList.toggle('transcribing', mode === 'transcribing');
+  micEl.setAttribute('aria-pressed', mode === 'listening' ? 'true' : 'false');
+  micEl.setAttribute('aria-label', mode === 'listening' ? 'Stop listening' : 'Cancel transcription');
+}
+
+function setVoiceLevel(level) {
+  if (voiceMeterEl) voiceMeterEl.style.setProperty('--level', String(level || 0));
+}
+
+function cancelVoice() {
+  state.voice.gen++;
+  const recorder = state.voice.recorder;
+  state.voice.recorder = null;
+  if (recorder) recorder.cancel();
+  if (state.voice.abort) {
+    state.voice.abort.abort();
+    state.voice.abort = null;
+  }
+  setVoiceMode('idle');
+}
+
+async function toggleVoice() {
+  if (state.voice.recorder) return stopVoice();
+  if (state.voice.abort) return cancelVoice();
+  if (state.voice.stopping) return;
+  return startVoice();
+}
+
+async function startVoice() {
+  if (state.stt && state.stt.available === false) {
+    appendSystem(`Voice input is off: ${state.stt.hint || 'no speech-to-text provider configured'}.`);
+    return;
+  }
+
+  // Talking is a barge-in: stop the reply that is playing, like a new message
+  // would. `ensure()` runs inside the click so the audio context is unlocked.
+  state.speaker.ensure();
+  interruptTurn();
+  state.idle.reset?.();
+
+  const gen = ++state.voice.gen;
+  const recorder = new VoiceRecorder({
+    onLevel: (level) => {
+      if (gen === state.voice.gen) setVoiceLevel(level);
+    },
+    onAutoStop: () => stopVoice(),
+  });
+
+  setVoiceMode('listening');
+  try {
+    await recorder.start();
+  } catch (err) {
+    if (gen === state.voice.gen) setVoiceMode('idle');
+    appendSystem(`voice: ${err.message}`);
+    return;
+  }
+  if (gen !== state.voice.gen) { recorder.cancel(); return; }
+  state.voice.recorder = recorder;
+}
+
+async function stopVoice() {
+  const recorder = state.voice.recorder;
+  if (!recorder || state.voice.stopping) return;
+
+  state.voice.stopping = true;
+  const gen = state.voice.gen;
+  state.voice.recorder = null;
+  setVoiceMode('transcribing');
+
+  try {
+    const result = await recorder.stop();
+    if (gen !== state.voice.gen || !result) return;
+    if (result.empty) {
+      appendSystem("Didn't catch any speech — click the mic and try again, a little closer.");
+      return;
+    }
+    await transcribeAudio(result, gen);
+  } catch (err) {
+    if (gen === state.voice.gen) appendSystem(`voice: ${err.message}`);
+  } finally {
+    if (gen === state.voice.gen) setVoiceMode('idle');
+    state.voice.stopping = false;
+  }
+}
+
+async function transcribeAudio({ bytes, mime }, gen) {
+  const controller = new AbortController();
+  state.voice.abort = controller;
+
+  try {
+    const res = await fetch('/api/transcribe', {
+      method: 'POST',
+      headers: { 'Content-Type': mime },
+      body: bytes,
+      signal: controller.signal,
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || `transcription failed (${res.status})`);
+    if (gen !== state.voice.gen) return;
+
+    const text = String(data.text || '').trim();
+    if (!text) {
+      appendSystem("Didn't catch that — try again.");
+      return;
+    }
+    submitText(text);
+  } catch (err) {
+    if (err.name !== 'AbortError' && gen === state.voice.gen) {
+      appendSystem(`voice: ${err.message}`);
+    }
+  } finally {
+    if (state.voice.abort === controller) state.voice.abort = null;
+  }
+}
+
+// ---------------------------------------------------------------- turns ----
+
+function interruptTurn() {
+  if (state.turnAbort) state.turnAbort.abort();
+  state.turnAbort = null;
+  state.turnGen++;
+  state.speaker.reset();
+}
+
+function submit() {
+  if (state.voice.recorder) cancelVoice();
   const text = inputEl.value.trim();
   if (!text) return;
   inputEl.value = '';
+  submitText(text);
+}
+
+async function submitText(text) {
   appendUser(text);
   state.speaker.ensure();
   state.speaker.reset();
@@ -279,10 +456,8 @@ async function submit() {
 }
 
 function newConversation() {
-  if (state.turnAbort) state.turnAbort.abort();
-  state.turnAbort = null;
-  state.turnGen++;
-  state.speaker.reset();
+  cancelVoice();
+  interruptTurn();
   state.history.length = 0;
   turnReply = '';
   turnError = false;
@@ -295,6 +470,11 @@ sendEl.addEventListener('click', submit);
 resetEl.addEventListener('click', newConversation);
 inputEl.addEventListener('keydown', (e) => {
   if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); submit(); }
+});
+
+window.addEventListener('keydown', (e) => {
+  if (e.key !== 'Escape') return;
+  if (state.voice.recorder || state.voice.abort) cancelVoice();
 });
 
 // The camera drifts a few degrees toward the cursor. Drag-to-orbit is gone on

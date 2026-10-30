@@ -19,6 +19,9 @@ jitters. If you take one thing from this repo, take this.
 ## Turn lifecycle
 
 ```
+POST /api/transcribe  audio/wav bytes            (only for voice turns)
+  ← 200 {text, provider, model, ms}              text goes into the turn below
+
 POST /api/turn {text, history[]}
   ← event: start    {t, tts, llm}                 resolved providers + model
   ← event: token    {text, t}                     … many, as the LLM streams
@@ -27,6 +30,13 @@ POST /api/turn {text, history[]}
   ← event: error    {stage, message}              llm or tts failure
   ← event: done     {t, firstAudioAt}
 ```
+
+Voice input is deliberately *not* part of the turn stream. The browser records one
+utterance (`client/mic.js`), uploads it, and gets JSON back; the transcript is
+rendered as a normal user line and then sent as `text`. That keeps the SSE
+orchestrator unchanged, makes transcription failures ordinary errors instead of
+stream events, and leaves a seam for streaming ASR later: a partial-transcript
+socket would emit `token`-like events before the turn starts.
 
 The server cuts the token stream into sentences (`findCut` in `server.mjs`) and
 pipes each through TTS → analysis → media store *as it arrives*, in order, on a
@@ -49,18 +59,21 @@ The Cloudflare Worker has no shared memory between isolates, so it inlines
 
 ### Provider adapters
 
-`pipeline/llm.mjs` and `pipeline/tts.mjs` are the only vendor-aware code. Each
-exposes one async contract:
+`pipeline/llm.mjs`, `pipeline/stt.mjs`, and `pipeline/tts.mjs` are the only
+vendor-aware code. Each exposes one async contract:
 
 ```js
 streamReply(text, { history, signal }) -> AsyncIterable<string>
+transcribe(audioBytes, { mime, language, signal }) -> { text, provider, model, ms }
 speak(text, { previousText, signal }) -> { wav, sampleRate, duration, ... }
 ```
 
 OpenAI-compatible and Anthropic streaming share the SSE reader in
 `pipeline/http.mjs`; ElevenLabs returns raw PCM, which is wrapped as a 32-bit
-float WAV for WebAudio. Retries, timeouts, LRU caching, and error hints live in
-the adapters. See **[PROVIDERS.md](PROVIDERS.md)** for configuration.
+float WAV for WebAudio. Speech-to-text is a single multipart request; a 16 kHz WAV
+is stripped to headerless PCM for Scribe. Retries, timeouts, LRU caching, and
+error hints live in the adapters. See **[PROVIDERS.md](PROVIDERS.md)** for
+configuration.
 
 ### frames format
 
@@ -126,9 +139,10 @@ need interoperability; nothing else depends on the format.
 
 ```
 Cloudflare Worker (realtime-avatar)
-  ├─ /api/turn    POST → SSE, runs the same turn pipeline as server.mjs
-  ├─ /api/health  GET  → resolved providers
-  └─ /*           GET  → Cloudflare asset router → dist/ (client + .avtr)
+  ├─ /api/turn        POST → SSE, runs the same turn pipeline as server.mjs
+  ├─ /api/transcribe  POST → JSON, one utterance of audio in, text out
+  ├─ /api/health      GET  → resolved providers
+  └─ /*               GET  → Cloudflare asset router → dist/ (client + .avtr)
 ```
 
 `server/pipeline/turn.mjs` is the shared orchestration; the transport is an

@@ -11,8 +11,10 @@ import { join } from 'node:path';
 
 import { loadEnv, parseEnv } from '../server/load-env.mjs';
 import { speak, listVoices } from '../server/pipeline/tts.mjs';
+import { transcribe, sttProvider, sttInfo } from '../server/pipeline/stt.mjs';
 import { streamReply, sanitizeHistory, llmProvider } from '../server/pipeline/llm.mjs';
 import { readWav } from '../server/pipeline/wav.mjs';
+import { encodeWav16 } from '../client/mic.js';
 
 const ENV_KEYS = [
   'LLM_PROVIDER', 'OPENAI_API_KEY', 'OPENAI_BASE_URL', 'LLM_MODEL',
@@ -25,6 +27,8 @@ const ENV_KEYS = [
   'ELEVENLABS_SPEAKER_BOOST', 'ELEVENLABS_LANGUAGE_CODE', 'ELEVENLABS_RETRIES',
   'ELEVENLABS_TIMEOUT_MS', 'ELEVENLABS_REQUEST_STITCHING', 'ELEVENLABS_ENABLE_LOGGING',
   'TTS_CACHE_SIZE', 'TTS_VOICE', 'TTS_RATE',
+  'STT_PROVIDER', 'STT_LANGUAGE', 'STT_TIMEOUT_MS', 'STT_RETRIES', 'STT_MAX_AUDIO_MB',
+  'ELEVENLABS_STT_MODEL', 'ELEVENLABS_STT_PCM', 'OPENAI_STT_MODEL', 'OPENAI_STT_BASE_URL',
 ];
 const ORIGINAL = new Map(ENV_KEYS.map((key) => [key, process.env[key]]));
 
@@ -74,8 +78,9 @@ before(async () => {
   server = createServer(async (req, res) => {
     const chunks = [];
     for await (const chunk of req) chunks.push(chunk);
-    const body = Buffer.concat(chunks).toString('utf8');
-    requests.push({ url: req.url, method: req.method, headers: req.headers, body });
+    const raw = Buffer.concat(chunks);
+    const body = raw.toString('utf8');
+    requests.push({ url: req.url, method: req.method, headers: req.headers, body, raw });
     const path = new URL(req.url, 'http://mock').pathname;
 
     if (path.startsWith('/v1/text-to-speech/')) {
@@ -139,6 +144,33 @@ before(async () => {
         'event: content_block_delta\ndata: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":" from Claude."}}\n\n',
         'event: message_stop\ndata: {"type":"message_stop"}\n\n',
       ]);
+      return;
+    }
+
+    if (path === '/v1/speech-to-text') {
+      if (req.headers['xi-api-key'] === 'bad-permission') {
+        res.writeHead(401, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({
+          detail: {
+            type: 'authentication_error',
+            message: 'The API key you used is missing the permission speech_to_text to execute this operation.',
+            status: 'missing_permissions',
+          },
+        }));
+        return;
+      }
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({
+        language_code: 'eng',
+        language_probability: 0.98,
+        text: '  Hello   there. ',
+      }));
+      return;
+    }
+
+    if (path === '/v1/audio/transcriptions') {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ text: ' hello from whisper ' }));
       return;
     }
 
@@ -488,4 +520,139 @@ test('provider detection follows explicit env, then available keys', () => {
 
   process.env.LLM_PROVIDER = 'deepseek';
   assert.equal(llmProvider(), 'deepseek');
+});
+
+// ------------------------------------------------------------------ stt ----
+
+function sttWav(seconds = 0.5, sampleRate = 16000) {
+  const samples = new Float32Array(Math.round(seconds * sampleRate));
+  for (let i = 0; i < samples.length; i++) {
+    samples[i] = 0.4 * Math.sin((2 * Math.PI * 220 * i) / sampleRate);
+  }
+  return encodeWav16(samples, sampleRate);
+}
+
+test('ElevenLabs: posts Scribe form data and returns the transcript', async () => {
+  setEnv({
+    STT_PROVIDER: 'elevenlabs',
+    ELEVENLABS_API_KEY: 'test-key',
+    ELEVENLABS_BASE_URL: base,
+  });
+
+  const result = await transcribe(sttWav(0.5, 16000), { mime: 'audio/wav' });
+
+  assert.equal(result.provider, 'elevenlabs');
+  assert.equal(result.model, 'scribe_v2');
+  assert.equal(result.text, 'Hello there.');
+  assert.equal(result.language, 'eng');
+
+  const req = requests.find((r) => r.url.startsWith('/v1/speech-to-text'));
+  assert.equal(req.headers['xi-api-key'], 'test-key');
+  assert.match(req.url, /enable_logging=true/);
+  assert.match(req.body, /name="model_id"\r\n\r\nscribe_v2/);
+  assert.match(req.body, /name="tag_audio_events"\r\n\r\nfalse/);
+  // 16 kHz mono 16-bit WAV is sent as headerless PCM, which Scribe prefers.
+  assert.match(req.body, /name="file_format"\r\n\r\npcm_s16le_16/);
+  assert.equal(req.raw.includes(Buffer.from('RIFF')), false);
+});
+
+test('ElevenLabs: other sample rates keep the WAV container', async () => {
+  setEnv({
+    STT_PROVIDER: 'elevenlabs',
+    ELEVENLABS_API_KEY: 'test-key',
+    ELEVENLABS_BASE_URL: base,
+  });
+
+  await transcribe(sttWav(0.5, 22050), { mime: 'audio/wav' });
+
+  const req = requests.find((r) => r.url.startsWith('/v1/speech-to-text'));
+  assert.match(req.body, /filename="speech.wav"/);
+  assert.equal(/name="file_format"/.test(req.body), false);
+  assert.equal(req.raw.includes(Buffer.from('RIFF')), true);
+});
+
+test('ElevenLabs: sends the configured model and language', async () => {
+  setEnv({
+    STT_PROVIDER: 'elevenlabs',
+    ELEVENLABS_API_KEY: 'test-key',
+    ELEVENLABS_BASE_URL: base,
+    ELEVENLABS_STT_MODEL: 'scribe_v2_medical',
+    STT_LANGUAGE: 'eng',
+  });
+
+  await transcribe(sttWav(), { mime: 'audio/wav' });
+
+  const req = requests.find((r) => r.url.startsWith('/v1/speech-to-text'));
+  assert.match(req.body, /name="model_id"\r\n\r\nscribe_v2_medical/);
+  assert.match(req.body, /name="language_code"\r\n\r\neng/);
+});
+
+test('ElevenLabs: a key without speech_to_text says exactly that', async () => {
+  setEnv({
+    STT_PROVIDER: 'elevenlabs',
+    ELEVENLABS_API_KEY: 'bad-permission',
+    ELEVENLABS_BASE_URL: base,
+    STT_RETRIES: '0',
+  });
+
+  await assert.rejects(
+    () => transcribe(sttWav(), { mime: 'audio/wav' }),
+    (err) => {
+      assert.match(err.message, /missing the permission speech_to_text/);
+      assert.match(err.message, /ELEVENLABS_API_KEY/);
+      assert.equal(err.code, 'STT_PERMISSION');
+      return true;
+    },
+  );
+});
+
+test('OpenAI: posts a WAV to /audio/transcriptions', async () => {
+  setEnv({
+    STT_PROVIDER: 'openai',
+    OPENAI_API_KEY: 'test-key',
+    OPENAI_BASE_URL: `${base}/v1`,
+  });
+
+  const result = await transcribe(sttWav(), { mime: 'audio/wav' });
+
+  assert.equal(result.provider, 'openai');
+  assert.equal(result.model, 'whisper-1');
+  assert.equal(result.text, 'hello from whisper');
+
+  const req = requests.find((r) => r.url === '/v1/audio/transcriptions');
+  assert.equal(req.headers.authorization, 'Bearer test-key');
+  assert.match(req.body, /name="model"\r\n\r\nwhisper-1/);
+  assert.match(req.body, /filename="speech.wav"/);
+  assert.equal(req.raw.includes(Buffer.from('RIFF')), true);
+});
+
+test('no key: voice input reports itself unavailable and refuses to record', async () => {
+  const info = sttInfo();
+  assert.equal(info.provider, 'none');
+  assert.equal(info.available, false);
+  assert.match(info.hint, /ELEVENLABS_API_KEY/);
+
+  await assert.rejects(() => transcribe(sttWav(), {}), /not configured/);
+});
+
+test('STT: empty audio is rejected before any request', async () => {
+  setEnv({
+    STT_PROVIDER: 'elevenlabs',
+    ELEVENLABS_API_KEY: 'test-key',
+    ELEVENLABS_BASE_URL: base,
+  });
+
+  await assert.rejects(() => transcribe(new Uint8Array(0), {}), /empty audio/);
+  assert.equal(requests.length, 0);
+});
+
+test('sttProvider follows explicit env, then available keys', () => {
+  assert.equal(sttProvider(), 'none');
+  process.env.ELEVENLABS_API_KEY = 'x';
+  assert.equal(sttProvider(), 'elevenlabs');
+  delete process.env.ELEVENLABS_API_KEY;
+  process.env.OPENAI_API_KEY = 'x';
+  assert.equal(sttProvider(), 'openai');
+  process.env.STT_PROVIDER = 'none';
+  assert.equal(sttProvider(), 'none');
 });
